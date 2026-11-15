@@ -130,6 +130,9 @@ class AudioEngine(private val context: Context) {
     var onSongStarted: ((Song) -> Unit)? = null
     var onSongCompleted: ((Song) -> Unit)? = null
     var onSongSkipped: ((Song, Long, Long) -> Unit)? = null
+
+    /** Throttled playback progress (~5s) used for actual-listened-time learning. */
+    var onSongProgress: ((Song, Long, Long) -> Unit)? = null
     var onPlaybackStateChange: ((Boolean) -> Unit)? = null
     var onRepeatModeChanged: ((RepeatMode) -> Unit)? = null
     var onShuffleChanged: ((Boolean) -> Unit)? = null
@@ -727,6 +730,7 @@ class AudioEngine(private val context: Context) {
         progressJob = scope.launch {
             var lastValidPos = 0L
             var lastPersistTimeMs = System.currentTimeMillis()
+            var lastProgressNotifyMs = 0L
             while (isActive) {
                 if (activePlayer != null) {
                     try {
@@ -741,6 +745,13 @@ class AudioEngine(private val context: Context) {
                             if (now - lastPersistTimeMs >= 20000L) {
                                 lastPersistTimeMs = now
                                 persistPlaybackState()
+                            }
+                            // Throttled telemetry progress callback (~5s)
+                            if (now - lastProgressNotifyMs >= 5000L) {
+                                lastProgressNotifyMs = now
+                                _currentSong.value?.let { song ->
+                                    onSongProgress?.invoke(song, lastValidPos, _duration.value)
+                                }
                             }
                         } else {
                             lastValidPos = _currentPosition.value

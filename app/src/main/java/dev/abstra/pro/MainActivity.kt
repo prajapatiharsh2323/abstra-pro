@@ -376,6 +376,7 @@ class MainActivity : ComponentActivity() {
                                         onMixClick = { mix ->
                                             viewModel.playQueue(mix.songs)
                                         },
+                                        onRefreshMixes = { viewModel.refreshAiMixes() },
                                         onTogglePlay = { viewModel.togglePlayPause() },
                                         onExpandPlayer = { viewModel.setPlayerExpanded(true) },
                                         userName = userName,
@@ -502,7 +503,9 @@ class MainActivity : ComponentActivity() {
                                         userName = viewModel.userName.collectAsState().value,
                                         onUserNameChange = { viewModel.setUserName(it) },
                                         greetingEnabled = viewModel.greetingEnabled.collectAsState().value,
-                                        onGreetingEnabledChange = { viewModel.setGreetingEnabled(it) }
+                                        onGreetingEnabledChange = { viewModel.setGreetingEnabled(it) },
+                                        audioIntelligenceEnabled = viewModel.audioIntelligenceEnabled.collectAsState().value,
+                                        onAudioIntelligenceToggle = { viewModel.setAudioIntelligenceEnabled(it) }
                                     )
                                 }
                                 }

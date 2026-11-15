@@ -7,7 +7,6 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.abstra.pro.ai.AbstraAiEngine
-import dev.abstra.pro.ai.model.AiMix
 import dev.abstra.pro.audio.AudioEngine
 import dev.abstra.pro.data.db.AppDatabase
 import dev.abstra.pro.data.db.entities.LyricsCacheEntity
@@ -16,6 +15,8 @@ import dev.abstra.pro.data.repository.MetadataManager
 import dev.abstra.pro.data.repository.MusicRepository
 import dev.abstra.pro.lyrics.LyricsParser
 import dev.abstra.pro.lyrics.model.LyricsLine
+import dev.abstra.pro.ui.model.AiMix
+import dev.abstra.pro.ui.model.MixPresentation
 import dev.abstra.pro.ui.theme.AppTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
@@ -310,7 +311,51 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     val isScanning: StateFlow<Boolean> = repository.isScanning
 
     // ── AI Engine Mixes ──
-    val aiMixes: StateFlow<List<AiMix>> = aiEngine.aiMixes
+    val isGeneratingMixes: StateFlow<Boolean> = aiEngine.isGenerating
+
+    val aiMixes: StateFlow<List<AiMix>> = combine(
+        repository.allSongs, aiEngine.mixes
+    ) { songs, generated ->
+        val songById = songs.associateBy { it.id }
+        generated.mapNotNull { playlist ->
+            val resolved = playlist.tracks.mapNotNull { songById[it.songId] }
+            if (resolved.isEmpty()) return@mapNotNull null
+            val visuals = MixPresentation.byPreset(playlist.presetId)
+            AiMix(
+                id = playlist.presetId,
+                title = playlist.title,
+                subtitle = playlist.subtitle,
+                songs = resolved,
+                gradientColors = visuals.gradientColors,
+                iconName = visuals.iconName,
+                description = playlist.description
+            )
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    fun refreshAiMixes() {
+        viewModelScope.launch {
+            val songs = visibleSongs.value
+            if (songs.isNotEmpty()) aiEngine.generateDailyMixes(songs, forceRefresh = true)
+        }
+    }
+
+    // ── Audio Intelligence ──
+    private val _audioIntelligenceEnabled = MutableStateFlow(
+        prefs.getBoolean("audio_intelligence_enabled", false)
+    )
+    val audioIntelligenceEnabled: StateFlow<Boolean> = _audioIntelligenceEnabled.asStateFlow()
+
+    fun setAudioIntelligenceEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("audio_intelligence_enabled", enabled).apply()
+        _audioIntelligenceEnabled.value = enabled
+        aiEngine.setAudioIntelligenceEnabled(enabled)
+        if (enabled) {
+            // Seed the bounded analysis queue with a small slice of the
+            // library; the daily mixes add their own candidates later.
+            aiEngine.enqueueAudioAnalysis(visibleSongs.value.take(25))
+        }
+    }
 
     // ── Lyrics State ──
     private var _lastLyricsSongId = ""
@@ -347,12 +392,21 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             e.onSongSkipped = { song, playedSec, totalSec ->
                 aiEngine.onSongSkipped(song, playedSec, totalSec)
             }
+            e.onSongProgress = { song, positionMs, durationMs ->
+                aiEngine.onSongProgress(song, positionMs, durationMs)
+            }
 
             launch { e.currentSong.collect { current ->
                 if (current == null) _currentSong.value = null
                 else _currentSong.value = allSongs.value.find { it.id == current.id } ?: current
             } }
-            launch { e.isPlaying.collect { _isPlaying.value = it } }
+            launch { e.isPlaying.collect { playing ->
+                _isPlaying.value = playing
+                // Keeps optional audio analysis paused during active playback
+                // and persists listened time on pause.
+                aiEngine.setPlaybackActive(playing)
+                if (!playing) e.currentSong.value?.let { aiEngine.onPlaybackPaused(it) }
+            } }
             launch { e.currentPosition.collect { _currentPosition.value = it } }
             launch { e.duration.collect { _duration.value = it } }
             launch { e.queue.collect { _queue.value = it } }
@@ -403,9 +457,10 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         // Initial scan on boot
         viewModelScope.launch {
             repository.scanLocalMedia(_musicFolderUri.value, _minDurationFilterSec.value)
-            // Regenerate AI mixes once songs loaded
+            // Generate (or restore cached) daily mixes once songs loaded
             val initialSongs = visibleSongs.first { it.isNotEmpty() }
-            aiEngine.regenerateMixes(initialSongs)
+            aiEngine.setAudioIntelligenceEnabled(_audioIntelligenceEnabled.value)
+            aiEngine.generateDailyMixes(initialSongs)
         }
     }
 
@@ -555,7 +610,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             repository.scanLocalMedia(_musicFolderUri.value, _minDurationFilterSec.value)
             val songs = visibleSongs.value
             if (songs.isNotEmpty()) {
-                aiEngine.regenerateMixes(songs)
+                aiEngine.generateDailyMixes(songs)
             }
         }
     }
@@ -632,6 +687,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         if (!deleted || song == null) return
         viewModelScope.launch(Dispatchers.IO) {
             repository.deleteSongFromLibrary(song.id)
+            aiEngine.onSongsDeleted(listOf(song.id))
         }
     }
 
@@ -649,6 +705,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         if (!deleted || songs.isEmpty()) return
         viewModelScope.launch(Dispatchers.IO) {
             songs.forEach { repository.deleteSongFromLibrary(it.id) }
+            aiEngine.onSongsDeleted(songs.map { it.id })
         }
     }
 
@@ -670,6 +727,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 writeToFile = _writePhysicalTags.value,
                 filePath = filePath
             )
+            // The cached profile is built from effective metadata and is now stale.
+            aiEngine.onSongMetadataChanged(songId)
         }
     }
 
@@ -838,5 +897,6 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         super.onCleared()
         persistNowPlaying()
+        aiEngine.close()
     }
 }

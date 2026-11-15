@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -35,7 +36,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.abstra.pro.ai.model.AiMix
+import dev.abstra.pro.ui.model.AiMix
 import dev.abstra.pro.data.model.Artist
 import dev.abstra.pro.data.model.Playlist
 import dev.abstra.pro.data.model.Song
@@ -64,6 +65,7 @@ fun HomeScreen(
     onSongClick: (Song, List<Song>) -> Unit,
     onPlaylistClick: (Playlist) -> Unit,
     onMixClick: (AiMix) -> Unit,
+    onRefreshMixes: () -> Unit = {},
     onTogglePlay: () -> Unit,
     onExpandPlayer: () -> Unit,
     userName: String? = null,
@@ -284,13 +286,24 @@ fun HomeScreen(
                             style = MaterialTheme.typography.labelSmall,
                             color = colors.primaryStrong
                         )
+                        IconButton(
+                            onClick = onRefreshMixes,
+                            modifier = Modifier.size(26.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Refresh,
+                                contentDescription = "Refresh mixes",
+                                tint = colors.primaryStrong,
+                                modifier = Modifier.size(17.dp)
+                            )
+                        }
                     }
 
                     LazyRow(
                         horizontalArrangement = Arrangement.spacedBy(14.dp),
                         contentPadding = PaddingValues(horizontal = 2.dp)
                     ) {
-                        items(aiMixes, key = { it.title }) { mix ->
+                        items(aiMixes, key = { it.id }) { mix ->
                             Surface(
                                 modifier = Modifier
                                     .width(200.dp)

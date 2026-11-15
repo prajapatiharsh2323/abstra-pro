@@ -39,6 +39,9 @@ interface TelemetryDao {
     suspend fun deleteTelemetry(songId: String)
 
     // ── Markov Chain Transitions ──
+    @Query("SELECT * FROM markov_transitions")
+    suspend fun getAllTransitionsSync(): List<MarkovTransitionEntity>
+
     @Query("SELECT * FROM markov_transitions WHERE fromSongId = :fromSongId")
     suspend fun getTransitionsFrom(fromSongId: String): List<MarkovTransitionEntity>
 

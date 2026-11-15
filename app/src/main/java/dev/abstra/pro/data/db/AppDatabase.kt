@@ -7,6 +7,7 @@ import androidx.room.RoomDatabase
 import dev.abstra.pro.data.db.dao.LibraryDao
 import dev.abstra.pro.data.db.dao.PlaylistDao
 import dev.abstra.pro.data.db.dao.SettingsDao
+import dev.abstra.pro.data.db.dao.SongProfileDao
 import dev.abstra.pro.data.db.dao.TelemetryDao
 import dev.abstra.pro.data.db.entities.*
 import androidx.room.migration.Migration
@@ -24,16 +25,18 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         CustomEqPresetEntity::class,
         LyricsCacheEntity::class,
         WidgetPrefsEntity::class,
-        SettingsEntity::class
+        SettingsEntity::class,
+        SongProfileEntity::class
     ],
-    version = 4,
-    exportSchema = false
+    version = 5,
+    exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun libraryDao(): LibraryDao
     abstract fun playlistDao(): PlaylistDao
     abstract fun telemetryDao(): TelemetryDao
     abstract fun settingsDao(): SettingsDao
+    abstract fun songProfileDao(): SongProfileDao
 
     companion object {
         @Volatile
@@ -41,10 +44,36 @@ abstract class AppDatabase : RoomDatabase() {
 
         fun getInstance(context: Context): AppDatabase = getDatabase(context)
 
-        private val MIGRATION_3_4 = object : Migration(3, 4) {
+        /** Exposed for instrumentation migration tests. */
+        val MIGRATION_3_4 = object : Migration(3, 4) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE app_settings ADD COLUMN selectedFont TEXT NOT NULL DEFAULT 'SYSTEM'")
                 db.execSQL("ALTER TABLE app_settings ADD COLUMN greetingStyle TEXT NOT NULL DEFAULT 'CLASSIC'")
+            }
+        }
+
+        /** Exposed for instrumentation migration tests. */
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS song_profiles (" +
+                            "songId TEXT NOT NULL PRIMARY KEY, " +
+                            "energy REAL NOT NULL, " +
+                            "acousticness REAL NOT NULL, " +
+                            "instrumentalLikelihood REAL NOT NULL, " +
+                            "rhythmActivity REAL, " +
+                            "tags TEXT NOT NULL, " +
+                            "energyConfidence REAL NOT NULL, " +
+                            "acousticConfidence REAL NOT NULL, " +
+                            "instrumentalConfidence REAL NOT NULL, " +
+                            "profileSource TEXT NOT NULL, " +
+                            "metadataFingerprint TEXT NOT NULL, " +
+                            "analysisVersion INTEGER NOT NULL, " +
+                            "audioAnalyzedAt INTEGER, " +
+                            "updatedAt INTEGER NOT NULL)"
+                )
+                db.execSQL("ALTER TABLE songs ADD COLUMN fileSize INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE songs ADD COLUMN lastModified INTEGER NOT NULL DEFAULT 0")
             }
         }
 
@@ -55,8 +84,10 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "abstra_pro.db"
                 )
-                .addMigrations(MIGRATION_3_4)
-                .fallbackToDestructiveMigration()
+                .addMigrations(MIGRATION_3_4, MIGRATION_4_5)
+                // Ancient, unsupported schema versions are rebuilt instead of
+                // crashing; every supported version (3, 4) upgrades in place.
+                .fallbackToDestructiveMigrationFrom(1, 2)
                 .build()
                 INSTANCE = instance
                 instance

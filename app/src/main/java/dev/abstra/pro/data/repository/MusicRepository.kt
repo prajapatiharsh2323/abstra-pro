@@ -55,7 +55,9 @@ class MusicRepository(
                 albumId = entity.albumId,
                 isFavorite = ov?.isFavorite ?: entity.isFavorite,
                 coverUrl = ov?.customCoverUri,
-                lyrics = entity.lyrics
+                lyrics = entity.lyrics,
+                fileSize = entity.fileSize,
+                lastModified = entity.lastModified
             )
         }
     }
@@ -102,7 +104,7 @@ class MusicRepository(
         val prefs = context.getSharedPreferences("abstra_prefs", Context.MODE_PRIVATE)
 
         try {
-            val projection = arrayOf(
+            val projection = mutableListOf(
                 MediaStore.Audio.Media._ID,
                 MediaStore.Audio.Media.TITLE,
                 MediaStore.Audio.Media.ARTIST,
@@ -110,8 +112,13 @@ class MusicRepository(
                 MediaStore.Audio.Media.DURATION,
                 MediaStore.Audio.Media.DATA,
                 MediaStore.Audio.Media.DATE_ADDED,
-                MediaStore.Audio.Media.ALBUM_ID
+                MediaStore.Audio.Media.ALBUM_ID,
+                MediaStore.Audio.Media.SIZE,
+                MediaStore.Audio.Media.DATE_MODIFIED
             )
+            // GENRE is only queryable on MediaStore.Audio.Media since API 30.
+            val hasGenreColumn = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+            if (hasGenreColumn) projection.add(MediaStore.Audio.Media.GENRE)
 
             // Filter out tracks shorter than 10 seconds and ringtones/alarms
             var selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0 AND ${MediaStore.Audio.Media.DURATION} >= ${minDurationSec * 1000}"
@@ -137,7 +144,7 @@ class MusicRepository(
 
             val cursor = context.contentResolver.query(
                 MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
-                projection,
+                projection.toTypedArray(),
                 selection,
                 selectionArgs,
                 sortOrder
@@ -152,6 +159,9 @@ class MusicRepository(
                 val dataCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media.DATA)
                 val dateCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media.DATE_ADDED)
                 val albumIdCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM_ID)
+                val sizeCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media.SIZE)
+                val modifiedCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media.DATE_MODIFIED)
+                val genreCol = if (hasGenreColumn) c.getColumnIndexOrThrow(MediaStore.Audio.Media.GENRE) else -1
 
                 while (c.moveToNext()) {
                     val mediaId = c.getLong(idCol)
@@ -162,6 +172,12 @@ class MusicRepository(
                     val path = c.getString(dataCol) ?: ""
                     val dateAdded = c.getLong(dateCol)
                     val albumId = c.getLong(albumIdCol)
+                    val fileSize = c.getLong(sizeCol)
+                    // MediaStore timestamps are in seconds.
+                    val lastModified = c.getLong(modifiedCol) * 1000L
+                    val genre = if (hasGenreColumn && genreCol >= 0 && !c.isNull(genreCol)) {
+                        c.getString(genreCol)?.takeIf { it.isNotBlank() }
+                    } else null
 
                     val uri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, mediaId).toString()
                     val folderName = if (path.isNotEmpty()) {
@@ -179,10 +195,12 @@ class MusicRepository(
                             folderName = folderName,
                             filePath = path,
                             dateAdded = dateAdded,
-                            genre = null,
+                            genre = genre,
                             albumId = albumId,
                             isFavorite = false,
-                            lyrics = null
+                            lyrics = null,
+                            fileSize = fileSize,
+                            lastModified = lastModified
                         )
                     )
                 }
@@ -320,7 +338,9 @@ class MusicRepository(
             albumId = firstEntity.albumId,
             isFavorite = override?.isFavorite ?: firstEntity.isFavorite,
             coverUrl = override?.customCoverUri,
-            lyrics = firstEntity.lyrics
+            lyrics = firstEntity.lyrics,
+            fileSize = firstEntity.fileSize,
+            lastModified = firstEntity.lastModified
         )
     }
 
@@ -497,13 +517,14 @@ class MusicRepository(
         }
     }
 
-    /** Removes all local DB traces of a song (library, overrides, playlists, telemetry, lyrics). */
+    /** Removes all local DB traces of a song (library, overrides, playlists, telemetry, lyrics, profiles). */
     suspend fun deleteSongFromLibrary(songId: String) = withContext(Dispatchers.IO) {
         libraryDao.deleteSong(songId)
         libraryDao.deleteOverride(songId)
         libraryDao.deleteLyrics(songId)
         playlistDao.removeSongFromAllPlaylists(songId)
         telemetryDao.deleteTelemetry(songId)
+        db.songProfileDao().deleteProfile(songId)
     }
 
     // ─────────────────────────────────────────────────────────────

@@ -60,6 +60,8 @@ fun SettingsScreen(
     onUserNameChange: (String?) -> Unit,
     greetingEnabled: Boolean,
     onGreetingEnabledChange: (Boolean) -> Unit,
+    audioIntelligenceEnabled: Boolean = false,
+    onAudioIntelligenceToggle: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val colors = LocalAbstraColors.current
@@ -324,6 +326,33 @@ fun SettingsScreen(
                         }
 
 
+                    }
+                }
+            }
+
+            // ─────────────────────────────────────────────────────────────
+            // 4b. INTELLIGENCE (on-device AI)
+            // ─────────────────────────────────────────────────────────────
+            item {
+                SettingsSection(title = "Intelligence") {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Audio Intelligence", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = colors.textPrimary)
+                            Text(
+                                "Off: mixes use metadata only. On: a few short audio samples per track (never during playback, max 60 tracks/day) refine your mixes. Everything stays on-device.",
+                                fontSize = 12.sp,
+                                color = colors.textSecondary
+                            )
+                        }
+                        Switch(
+                            checked = audioIntelligenceEnabled,
+                            onCheckedChange = onAudioIntelligenceToggle,
+                            colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = colors.primary)
+                        )
                     }
                 }
             }

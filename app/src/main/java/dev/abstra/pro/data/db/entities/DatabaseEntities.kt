@@ -18,7 +18,9 @@ data class SongEntity(
     val genre: String?,
     val albumId: Long,
     val isFavorite: Boolean = false,
-    val lyrics: String? = null
+    val lyrics: String? = null,
+    val fileSize: Long = 0L,
+    val lastModified: Long = 0L
 )
 
 /** User custom metadata overrides (App-only edit mode) */
