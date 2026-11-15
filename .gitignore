@@ -1,3 +1,23 @@
+# Local configuration and signing
 keystore.properties
 *.jks
-goldie/out/
+local.properties
+
+# Gradle / Kotlin build output and caches
+.gradle/
+.kotlin/
+build/
+app/build/
+
+# Local debug dumps
+crash_log.txt
+logcat_output.txt
+log.txt
+lune.txt
+abstra.txt
+*.log
+
+# IDE / OS
+.idea/
+*.iml
+.DS_Store
