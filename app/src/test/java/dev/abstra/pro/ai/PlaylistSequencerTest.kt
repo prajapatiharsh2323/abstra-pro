@@ -88,7 +88,7 @@ class PlaylistSequencerTest {
         }
         val tracks = sequence(scored(songs))
 
-        assertTrue(tracks.size > 10)
+        assertTrue("playlist too small: size=${tracks.size}", tracks.size > 10)
         val artistsById = songs.associate { it.id to it.artist }
         for (i in 1 until tracks.size) {
             val prev = artistsById.getValue(tracks[i - 1].songId)

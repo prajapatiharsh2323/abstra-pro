@@ -116,10 +116,10 @@ object AudioDsp {
         val rmsEnergy = ((meanRmsDb - RMS_FLOOR_DB) / (RMS_CEIL_DB - RMS_FLOOR_DB)).coerceIn(0f, 1f)
 
         // Dynamic range (P95 - P10 of frame RMS in dB)
-        val sortedRmsDb = rmsValues
-            .map { (20.0 * log10((it + 1e-9f).toDouble())).coerceIn(RMS_FLOOR_DB.toDouble(), RMS_CEIL_DB.toDouble()) }
-            .toFloatArray()
-            .also { it.sort() }
+        val sortedRmsDb = FloatArray(frames) { i ->
+            (20.0 * log10((rmsValues[i] + 1e-9f).toDouble()))
+                .coerceIn(RMS_FLOOR_DB.toDouble(), RMS_CEIL_DB.toDouble()).toFloat()
+        }.also { it.sort() }
         val p95 = sortedRmsDb[((sortedRmsDb.size - 1) * 0.95).toInt().coerceIn(0, sortedRmsDb.size - 1)]
         val p10 = sortedRmsDb[((sortedRmsDb.size - 1) * 0.10).toInt().coerceIn(0, sortedRmsDb.size - 1)]
         val dynamicRange = ((p95 - p10) / DYNAMIC_RANGE_SPAN_DB).coerceIn(0f, 1f)

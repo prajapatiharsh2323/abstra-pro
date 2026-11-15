@@ -122,7 +122,8 @@ class AudioDspTest {
 
     @Test
     fun `dbfs mapping is sane`() {
-        assertEquals(0f, AudioDsp.dbfs(0f), 0.01f)
+        // Digital silence is floored at the 1e-9 epsilon: 20*log10(1e-9) = -180 dB.
+        assertEquals(-180f, AudioDsp.dbfs(0f), 0.01f)
         assertEquals(-20f, AudioDsp.dbfs(0.1f), 0.01f)
     }
 }

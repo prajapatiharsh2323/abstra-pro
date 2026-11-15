@@ -166,6 +166,66 @@ object SongProfileAnalyzer {
         GenrePrior("traditional", 0.5f, 0.15f, 0.5f, 0.15f, 0.3f, 0.15f)
     )
 
+    /**
+     * Broader genre groups used for transition compatibility, so related
+     * styles (rock/metal, house/techno, r&b/soul) count as compatible while
+     * genuinely distant ones (rock/classical) do not. A family may belong
+     * to several groups. Keys must match the GenrePrior family strings.
+     */
+    private val FAMILY_GROUPS: Map<String, Set<String>> = mapOf(
+        "metal" to setOf("rock"),
+        "hardcore" to setOf("rock"),
+        "punk" to setOf("rock"),
+        "grunge" to setOf("rock"),
+        "rock" to setOf("rock"),
+        "alternative" to setOf("rock"),
+        "indie" to setOf("rock", "pop"),
+        "edm" to setOf("electronic"),
+        "dance" to setOf("electronic"),
+        "house" to setOf("electronic"),
+        "techno" to setOf("electronic"),
+        "trance" to setOf("electronic"),
+        "dubstep" to setOf("electronic"),
+        "drum and bass" to setOf("electronic"),
+        "electronic" to setOf("electronic"),
+        "electropop" to setOf("electronic", "pop"),
+        "synthpop" to setOf("electronic", "pop"),
+        "hip hop" to setOf("hip-hop"),
+        "hip-hop" to setOf("hip-hop"),
+        "rap" to setOf("hip-hop"),
+        "trap" to setOf("hip-hop", "electronic"),
+        "pop" to setOf("pop"),
+        "disco" to setOf("pop", "electronic"),
+        "r&b" to setOf("r&b"),
+        "rhythm and blues" to setOf("r&b"),
+        "soul" to setOf("r&b"),
+        "funk" to setOf("r&b"),
+        "reggaeton" to setOf("latin"),
+        "ambient" to setOf("ambient", "electronic"),
+        "drone" to setOf("ambient"),
+        "classical" to setOf("classical"),
+        "orchestral" to setOf("classical"),
+        "symphony" to setOf("classical"),
+        "piano" to setOf("classical"),
+        "instrumental" to setOf("classical"),
+        "acoustic" to setOf("acoustic"),
+        "unplugged" to setOf("acoustic"),
+        "folk" to setOf("acoustic"),
+        "singer-songwriter" to setOf("acoustic"),
+        "lo-fi" to setOf("chill", "electronic"),
+        "lofi" to setOf("chill", "electronic"),
+        "chill" to setOf("chill"),
+        "jazz" to setOf("jazz"),
+        "blues" to setOf("jazz", "r&b"),
+        "country" to setOf("acoustic", "folk-country"),
+        "gospel" to setOf("r&b"),
+        "reggae" to setOf("reggae"),
+        "soundtrack" to setOf("classical"),
+        "score" to setOf("classical"),
+        "world" to setOf("world"),
+        "traditional" to setOf("world")
+    )
+
     // ─────────────────────────────────────────────────────────────
     // Public API
     // ─────────────────────────────────────────────────────────────
@@ -301,7 +361,8 @@ object SongProfileAnalyzer {
 
     /**
      * Are two genres related enough to count as a smooth transition?
-     * Returns 1.0 (same family), 0.6 (no data), or 0.4 (different families).
+     * Returns 1.0 (same family or broader group), 0.6 (no data), or
+     * 0.4 (different families).
      */
     fun genreCompatibility(genreA: String?, genreB: String?): Float {
         val a = genreFamilies(genreA)
@@ -312,7 +373,13 @@ object SongProfileAnalyzer {
 
     fun genreFamilies(genre: String?): Set<String> {
         if (genre.isNullOrBlank()) return emptySet()
-        return splitGenres(genre).mapNotNull { genrePrior(it)?.family }.toSet()
+        val families = mutableSetOf<String>()
+        for (g in splitGenres(genre)) {
+            val prior = genrePrior(g) ?: continue
+            families += prior.family
+            families += FAMILY_GROUPS[prior.family].orEmpty()
+        }
+        return families
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -345,8 +412,10 @@ object SongProfileAnalyzer {
             if (e.totalWeight <= 0f) return Resolved(base.coerceIn(0.05f, 0.98f), 0f)
             val spread = e.max - e.min
             // Conflicting evidence lowers confidence instead of inventing a
-            // classification, but only when the spread is meaningful.
-            val conflictPenalty = if (spread > 0.5f) 0.6f else 1f
+            // classification, but only when the spread is meaningful. The
+            // penalty must actually reduce confidence below a single clean
+            // signal of the same total weight (hence 0.5, not higher).
+            val conflictPenalty = if (spread > 0.5f) 0.5f else 1f
             val confidence = min(CONFIDENCE_CAP, e.totalWeight) * conflictPenalty
             val value = e.weightedSum / e.totalWeight
             return Resolved(value.coerceIn(0.05f, 0.98f), confidence)

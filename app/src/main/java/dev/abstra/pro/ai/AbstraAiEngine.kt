@@ -7,8 +7,6 @@ import dev.abstra.pro.ai.model.GeneratedPlaylist
 import dev.abstra.pro.ai.model.PlaylistRequest
 import dev.abstra.pro.ai.model.RecommendationReason
 import dev.abstra.pro.ai.model.RecommendedTrack
-import dev.abstra.pro.ai.model.ScoringContext
-import dev.abstra.pro.ai.model.SequenceInput
 import dev.abstra.pro.ai.model.SongProfile
 import dev.abstra.pro.ai.model.TimeOfDay
 import dev.abstra.pro.data.db.AppDatabase
@@ -352,10 +350,10 @@ class AbstraAiEngine(
         for (song in songs) {
             val existing = profileCache[song.id]
             val fingerprint = SongProfileAnalyzer.fingerprint(song)
-            val fresh = existing != null &&
-                    existing.metadataFingerprint == fingerprint &&
-                    existing.analysisVersion == SongProfileAnalyzer.ANALYSIS_VERSION
-            val profile = if (fresh && existing != null) {
+            val profile: SongProfile = if (existing != null &&
+                existing.metadataFingerprint == fingerprint &&
+                existing.analysisVersion == SongProfileAnalyzer.ANALYSIS_VERSION
+            ) {
                 existing
             } else {
                 val analyzed = SongProfileAnalyzer.analyze(song)

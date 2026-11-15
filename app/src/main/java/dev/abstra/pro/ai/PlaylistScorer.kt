@@ -206,7 +206,9 @@ object PlaylistScorer {
         }
 
         val featureValue: Float? = if (featureParts.isEmpty()) null else weightedAverage(featureParts)
-        val featureConfidence = min(1f, featureParts.sumOf { it.second })
+        var featureConfidenceRaw = 0f
+        for (part in featureParts) featureConfidenceRaw += part.second
+        val featureConfidence = min(1f, featureConfidenceRaw)
 
         // Genre/tag compatibility as a supporting signal.
         val preferredHits = profile.tags.intersect(preset.preferredTags)
@@ -263,10 +265,12 @@ object PlaylistScorer {
             }
         }
 
+        var partsConfidence = 0f
+        for (part in parts) partsConfidence += part.second
         return if (parts.isEmpty()) {
             AffinityModel.NEUTRAL_AFFINITY to 0f
         } else {
-            weightedAverage(parts) to min(1f, parts.sumOf { it.second })
+            weightedAverage(parts) to min(1f, partsConfidence)
         }
     }
 

@@ -83,9 +83,10 @@ class AudioFeatureExtractor(private val context: Context) {
                 coroutineContext.ensureActive()
                 if (results.size >= WINDOW_COUNT) break
 
-                val startUs = (song.durationMs * 1000L * position).coerceAtMost(
-                    (song.durationMs - (WINDOW_SECONDS * 1000L).toLong()).coerceAtLeast(0L) * 1000L
-                )
+                val maxStartMs = (song.durationMs - (WINDOW_SECONDS * 1000L).toLong())
+                    .coerceAtLeast(0L)
+                val startUs = (song.durationMs * position).toLong()
+                    .coerceAtMost(maxStartMs * 1000L)
                 val pcm = decodeWindow(
                     extractor = extractor,
                     codec = codec,

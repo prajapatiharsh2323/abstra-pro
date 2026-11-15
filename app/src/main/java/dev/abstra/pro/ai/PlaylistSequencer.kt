@@ -105,48 +105,57 @@ object PlaylistSequencer {
             var bestScore = -1f
             var bestTransition = 0f
 
-            for (candidate in shortlist) {
-                val candidateArtist = artistKey(candidate.base.song)
-                val candidateAlbum = albumKey(candidate.base.song)
+            // Constraint tiers. With few artists the rolling-window caps and
+            // the consecutive-artist rule can exclude every candidate at once
+            // (the only artist with window headroom is the current one), so
+            // the scan degrades gracefully instead of truncating the mix.
+            fun scan(enforceConsecutive: Boolean, enforceWindows: Boolean) {
+                for (candidate in shortlist) {
+                    val candidateArtist = artistKey(candidate.base.song)
+                    val candidateAlbum = albumKey(candidate.base.song)
 
-                if (!relaxed) {
-                    // No same artist consecutively when alternatives exist.
-                    if (candidateArtist == currentArtist) continue
-                    // Limit an artist to ~2 tracks in a rolling group of five.
-                    if ((recentArtists[candidateArtist] ?: 0) >= ARTIST_WINDOW_MAX) continue
-                    // Avoid repeatedly selecting songs from the same album.
-                    if (candidateAlbum != currentAlbum &&
-                        (recentAlbums[candidateAlbum] ?: 0) >= ALBUM_WINDOW_MAX
-                    ) continue
-                }
-                if (mustDiscover && !isDiscovery(candidate)) continue
+                    if (enforceConsecutive && candidateArtist == currentArtist) continue
+                    if (enforceWindows) {
+                        // Limit an artist to ~2 tracks in a rolling group of five.
+                        if ((recentArtists[candidateArtist] ?: 0) >= ARTIST_WINDOW_MAX) continue
+                        // Avoid repeatedly selecting songs from the same album.
+                        if (candidateAlbum != currentAlbum &&
+                            (recentAlbums[candidateAlbum] ?: 0) >= ALBUM_WINDOW_MAX
+                        ) continue
+                    }
+                    if (mustDiscover && !isDiscovery(candidate)) continue
 
-                val transition = transitionScore(
-                    currentProfile = current.base.profile,
-                    candidateProfile = candidate.base.profile,
-                    flowEnergy = flowEnergy,
-                    currentGenre = current.base.song.genre,
-                    candidateGenre = candidate.base.song.genre,
-                    input = input
-                )
-                val diversity = diversityScore(
-                    candidateArtist, candidateAlbum,
-                    currentArtist, currentAlbum,
-                    recentArtists, recentAlbums
-                )
+                    val transition = transitionScore(
+                        currentProfile = current.base.profile,
+                        candidateProfile = candidate.base.profile,
+                        flowEnergy = flowEnergy,
+                        currentGenre = current.base.song.genre,
+                        candidateGenre = candidate.base.song.genre,
+                        input = input
+                    )
+                    val diversity = diversityScore(
+                        candidateArtist, candidateAlbum,
+                        currentArtist, currentAlbum,
+                        recentArtists, recentAlbums
+                    )
 
-                var nextScore = NEXT_QUALITY_WEIGHT * candidate.score +
-                        NEXT_TRANSITION_WEIGHT * transition +
-                        NEXT_DIVERSITY_WEIGHT * diversity
-                // Deterministic micro-jitter for seeded variety between refreshes.
-                nextScore += random.nextFloat() * 0.01f
+                    var nextScore = NEXT_QUALITY_WEIGHT * candidate.score +
+                            NEXT_TRANSITION_WEIGHT * transition +
+                            NEXT_DIVERSITY_WEIGHT * diversity
+                    // Deterministic micro-jitter for seeded variety between refreshes.
+                    nextScore += random.nextFloat() * 0.01f
 
-                if (nextScore > bestScore) {
-                    bestScore = nextScore
-                    best = candidate
-                    bestTransition = transition
+                    if (nextScore > bestScore) {
+                        bestScore = nextScore
+                        best = candidate
+                        bestTransition = transition
+                    }
                 }
             }
+
+            if (!relaxed) scan(enforceConsecutive = true, enforceWindows = true)
+            if (best == null) scan(enforceConsecutive = true, enforceWindows = false)
+            if (best == null) scan(enforceConsecutive = false, enforceWindows = false)
 
             val chosen = best ?: break
             shortlist.remove(chosen)
