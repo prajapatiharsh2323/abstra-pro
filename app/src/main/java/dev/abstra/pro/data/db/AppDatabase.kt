@@ -74,6 +74,44 @@ abstract class AppDatabase : RoomDatabase() {
                 )
                 db.execSQL("ALTER TABLE songs ADD COLUMN fileSize INTEGER NOT NULL DEFAULT 0")
                 db.execSQL("ALTER TABLE songs ADD COLUMN lastModified INTEGER NOT NULL DEFAULT 0")
+
+                // v3->v4 added selectedFont/greetingStyle with SQL DEFAULTs that
+                // Room's schema does not declare. Rebuild app_settings without
+                // them so every v5 database has one canonical shape.
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS app_settings_rebuild (" +
+                            "id INTEGER NOT NULL PRIMARY KEY, " +
+                            "userName TEXT, " +
+                            "greetingEnabled INTEGER NOT NULL, " +
+                            "hasAskedForName INTEGER NOT NULL, " +
+                            "excludedFolderPaths TEXT NOT NULL, " +
+                            "themeMode TEXT NOT NULL, " +
+                            "accentColor TEXT NOT NULL, " +
+                            "crossfadeSeconds INTEGER NOT NULL, " +
+                            "gaplessEnabled INTEGER NOT NULL, " +
+                            "defaultSleepTimerMin INTEGER NOT NULL, " +
+                            "keepScreenOnInPlayer INTEGER NOT NULL, " +
+                            "sortOption TEXT NOT NULL, " +
+                            "showQueueOnSongClick INTEGER NOT NULL, " +
+                            "playlistOrder TEXT NOT NULL, " +
+                            "selectedFont TEXT NOT NULL, " +
+                            "greetingStyle TEXT NOT NULL)"
+                )
+                db.execSQL(
+                    "INSERT INTO app_settings_rebuild " +
+                            "(id, userName, greetingEnabled, hasAskedForName, excludedFolderPaths, " +
+                            "themeMode, accentColor, crossfadeSeconds, gaplessEnabled, " +
+                            "defaultSleepTimerMin, keepScreenOnInPlayer, sortOption, " +
+                            "showQueueOnSongClick, playlistOrder, selectedFont, greetingStyle) " +
+                            "SELECT id, userName, greetingEnabled, hasAskedForName, excludedFolderPaths, " +
+                            "themeMode, accentColor, crossfadeSeconds, gaplessEnabled, " +
+                            "defaultSleepTimerMin, keepScreenOnInPlayer, sortOption, " +
+                            "showQueueOnSongClick, playlistOrder, " +
+                            "COALESCE(selectedFont, 'SYSTEM'), COALESCE(greetingStyle, 'CLASSIC') " +
+                            "FROM app_settings"
+                )
+                db.execSQL("DROP TABLE app_settings")
+                db.execSQL("ALTER TABLE app_settings_rebuild RENAME TO app_settings")
             }
         }
 

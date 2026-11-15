@@ -1,5 +1,6 @@
 package dev.abstra.pro.data.db.entities
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
@@ -19,8 +20,10 @@ data class SongEntity(
     val albumId: Long,
     val isFavorite: Boolean = false,
     val lyrics: String? = null,
-    val fileSize: Long = 0L,
-    val lastModified: Long = 0L
+    // SQL defaults keep the ALTER TABLE migration valid for existing rows and
+    // must match what Room expects in the exported schema.
+    @ColumnInfo(defaultValue = "0") val fileSize: Long = 0L,
+    @ColumnInfo(defaultValue = "0") val lastModified: Long = 0L
 )
 
 /** User custom metadata overrides (App-only edit mode) */

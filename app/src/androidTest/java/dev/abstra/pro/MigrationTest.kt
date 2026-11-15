@@ -9,10 +9,12 @@ import org.junit.Test
 
 /**
  * Verifies the Room v4 -> v5 upgrade path (song_profiles table + songs
- * fileSize/lastModified columns) without destroying user data.
+ * fileSize/lastModified columns + app_settings normalization) without
+ * destroying user data.
  *
- * Requires the exported schemas 4.json and 5.json in app/schemas (created
- * automatically by KSP once the project builds with schema export enabled).
+ * Uses the hand-crafted exported schema 4.json in app/schemas (v4 had
+ * exportSchema disabled, so it is reproduced from the v4 entities) and the
+ * 5.json that KSP generates automatically on build.
  */
 class MigrationTest {
 
