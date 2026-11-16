@@ -140,6 +140,7 @@ class MainActivity : ComponentActivity() {
             }
             
             val aiMixes by viewModel.aiMixes.collectAsState()
+            val isGeneratingMixes by viewModel.isGeneratingMixes.collectAsState()
             val lyricsLines by viewModel.currentLyrics.collectAsState()
             val lyricsOffsetMs by viewModel.lyricsTimeOffsetMs.collectAsState()
             val lifetimeMs by viewModel.totalLifetimePlaytime.collectAsState()
@@ -364,6 +365,7 @@ class MainActivity : ComponentActivity() {
                                         mostPlayed = viewModel.mostPlayed.collectAsState().value,
                                         playlists = playlists,
                                         aiMixes = aiMixes,
+                                        isGeneratingMixes = isGeneratingMixes,
                                         topArtists = emptyList(),
                                         topGenres = emptyList(),
                                         totalSongs = allSongs.size,

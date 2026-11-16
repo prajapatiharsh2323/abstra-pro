@@ -57,6 +57,7 @@ fun HomeScreen(
     mostPlayed: List<Song>,
     playlists: List<Playlist>,
     aiMixes: List<AiMix>,
+    isGeneratingMixes: Boolean = false,
     topArtists: List<Artist>,
     topGenres: List<Pair<String, Int>>,
     totalSongs: Int,
@@ -258,7 +259,7 @@ fun HomeScreen(
         // ─────────────────────────────────────────────────────────────
         // 2. AI SMART MIXES CAROUSEL
         // ─────────────────────────────────────────────────────────────
-        if (aiMixes.isNotEmpty()) {
+        if (aiMixes.isNotEmpty() || (isGeneratingMixes && totalSongs > 0)) {
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(
@@ -281,21 +282,37 @@ fun HomeScreen(
                                 fontWeight = FontWeight.ExtraBold
                             )
                         }
-                        Text(
-                            text = "On-Device",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = colors.primaryStrong
-                        )
-                        IconButton(
-                            onClick = onRefreshMixes,
-                            modifier = Modifier.size(26.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.Refresh,
-                                contentDescription = "Refresh mixes",
-                                tint = colors.primaryStrong,
-                                modifier = Modifier.size(17.dp)
+                        if (aiMixes.isEmpty()) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(14.dp),
+                                    strokeWidth = 2.dp,
+                                    color = colors.primaryStrong
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Building…",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = colors.textMuted
+                                )
+                            }
+                        } else {
+                            Text(
+                                text = "On-Device",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = colors.primaryStrong
                             )
+                            IconButton(
+                                onClick = onRefreshMixes,
+                                modifier = Modifier.size(26.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Refresh,
+                                    contentDescription = "Refresh mixes",
+                                    tint = colors.primaryStrong,
+                                    modifier = Modifier.size(17.dp)
+                                )
+                            }
                         }
                     }
 

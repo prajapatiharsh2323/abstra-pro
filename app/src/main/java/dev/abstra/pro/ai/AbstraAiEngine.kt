@@ -724,7 +724,14 @@ class AbstraAiEngine(
                         // mixes simply never appear and nothing in logcat says why.
                         Log.e(TAG, "generateDailyMixes failed", throwable)
                     }
-                    _mixes.value = result.getOrDefault(emptyList())
+                    val mixes = result.getOrDefault(emptyList())
+                    if (mixes.isEmpty()) {
+                        Log.w(TAG, "generateDailyMixes produced 0 mixes for ${allSongs.size} songs")
+                    } else {
+                        Log.i(TAG, "generateDailyMixes: ${mixes.size} mixes, " +
+                                mixes.joinToString { "${it.presetId}=${it.tracks.size} tracks" })
+                    }
+                    _mixes.value = mixes
                 } finally {
                     _isGenerating.value = false
                 }
