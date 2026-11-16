@@ -178,4 +178,63 @@ class CandidateRetrieverTest {
         assertTrue("no-profile" !in result.sourceRanks.getValue(CandidateRetriever.SOURCE_MOOD).keys)
         assertTrue("ok" in result.sourceRanks.getValue(CandidateRetriever.SOURCE_MOOD).keys)
     }
+
+    // ── Cold-start fallback ──
+
+    @Test
+    fun `cold start with no evidence still yields a baseline pool`() {
+        // Fresh install: no favourites, no history, no tastes, no signatures
+        // and metadata whose profiles carry zero confidence. Every personalised
+        // source is empty — the mixes must not disappear because of it.
+        val zeroConfidence = songs.associate { it.id to profile(it.id).copy(energyConfidence = 0f) }
+        val retriever = CandidateRetriever(
+            songs = songs,
+            profiles = zeroConfidence,
+            signatures = emptyMap(),
+            scaler = null as RobustScaler?,
+            audioGraph = emptyMap(),
+            pprScores = emptyMap(),
+            trackTastes = emptyMap(),
+            favoriteIds = emptySet(),
+            anchorSongIds = emptyList()
+        )
+
+        val result = retriever.retrieve(preset, seedSongId = null)
+
+        assertTrue("baseline pool must not be empty", result.fusedScores.isNotEmpty())
+        assertEquals(
+            setOf(CandidateRetriever.SOURCE_BASELINE),
+            result.sourceRanks.keys
+        )
+    }
+
+    @Test
+    fun `baseline pool is flavoured by the preset energy target`() {
+        val zeroConfidence = mapOf(
+            "quiet" to profile("quiet", energy = 0.2f).copy(energyConfidence = 0f),
+            "loud" to profile("loud", energy = 0.9f).copy(energyConfidence = 0f)
+        )
+        val quietSong = song("quiet")
+        val loudSong = song("loud")
+
+        fun retriever() = CandidateRetriever(
+            songs = listOf(quietSong, loudSong),
+            profiles = zeroConfidence,
+            signatures = emptyMap(),
+            scaler = null as RobustScaler?,
+            audioGraph = emptyMap(),
+            pprScores = emptyMap(),
+            trackTastes = emptyMap(),
+            favoriteIds = emptySet(),
+            anchorSongIds = emptyList()
+        )
+
+        val chill = retriever().retrieve(preset.copy(targetEnergy = 0.2f), seedSongId = null)
+        val highEnergy = retriever().retrieve(preset.copy(targetEnergy = 0.9f), seedSongId = null)
+
+        val chillRanks = chill.sourceRanks.getValue(CandidateRetriever.SOURCE_BASELINE)
+        val highRanks = highEnergy.sourceRanks.getValue(CandidateRetriever.SOURCE_BASELINE)
+        assertEquals(1, chillRanks.getValue("quiet"))
+        assertEquals(1, highRanks.getValue("loud"))
+    }
 }

@@ -69,6 +69,27 @@ class CandidateRetriever(
             sources += RankFusion.Source(SOURCE_DISCOVERY, SOURCE_WEIGHT_DISCOVERY, discoveryTop)
         }
 
+        // Cold-start fallback: when none of the personalised sources have any
+        // evidence (fresh install — no favourites, no history, no anchors —
+        // and metadata that carries no confidence), the pool would be empty
+        // and every preset would resolve to null, so no mixes appear at all.
+        // Rank the library by preset energy compatibility; profile.energy
+        // always has a base-prior value even at zero confidence, and the
+        // ordering is deterministic. Honest: it is explicitly a baseline,
+        // never fabricated preference.
+        if (sources.isEmpty()) {
+            val baseline = songs.mapNotNull { song ->
+                val profile = profiles[song.id] ?: return@mapNotNull null
+                song.id to gaussian(profile.energy, preset.targetEnergy, preset.energyTolerance)
+            }
+                .sortedWith(compareByDescending<Pair<String, Float>> { it.second }.thenBy { it.first })
+                .take(BASELINE_LIMIT)
+                .map { it.first }
+            if (baseline.isNotEmpty()) {
+                sources += RankFusion.Source(SOURCE_BASELINE, SOURCE_WEIGHT_BASELINE, baseline)
+            }
+        }
+
         val fused = RankFusion.fuse(sources)
         val sourceRanks = HashMap<String, Map<String, Int>>()
         for (source in sources) {
@@ -230,11 +251,13 @@ class CandidateRetriever(
         const val SOURCE_PPR = "personalized_pagerank"
         const val SOURCE_MOOD = "mood"
         const val SOURCE_DISCOVERY = "discovery"
+        const val SOURCE_BASELINE = "baseline"
 
         const val SOURCE_WEIGHT_AUDIO = 1.0f
         const val SOURCE_WEIGHT_PPR = 1.2f
         const val SOURCE_WEIGHT_MOOD = 0.8f
         const val SOURCE_WEIGHT_DISCOVERY = 0.6f
+        const val SOURCE_WEIGHT_BASELINE = 0.5f
 
         private const val ANCHOR_LIMIT = 12
         private const val ANCHOR_SESSION_LIMIT = 3
@@ -242,6 +265,7 @@ class CandidateRetriever(
         private const val PPR_TOP_LIMIT = 60
         private const val MOOD_LIMIT = 60
         private const val DISCOVERY_LIMIT = 40
+        private const val BASELINE_LIMIT = 80
         private const val MIN_DISCOVERY_RELEVANCE = 0.55f
     }
 }

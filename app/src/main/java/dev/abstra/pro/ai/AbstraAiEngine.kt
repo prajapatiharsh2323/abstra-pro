@@ -1,6 +1,7 @@
 package dev.abstra.pro.ai
 
 import android.content.Context
+import android.util.Log
 import dev.abstra.pro.ai.audio.AudioFeatureExtractor
 import dev.abstra.pro.ai.audio.AudioSimilarity
 import dev.abstra.pro.ai.graph.PersonalizedPageRank
@@ -716,7 +717,14 @@ class AbstraAiEngine(
             mixMutex.withLock {
                 _isGenerating.value = true
                 try {
-                    _mixes.value = generateMixesInternal(allSongs, forceRefresh)
+                    val result = runCatching {
+                        generateMixesInternal(allSongs, forceRefresh)
+                    }.onFailure { throwable ->
+                        // Never let generation fail silently: without this the
+                        // mixes simply never appear and nothing in logcat says why.
+                        Log.e(TAG, "generateDailyMixes failed", throwable)
+                    }
+                    _mixes.value = result.getOrDefault(emptyList())
                 } finally {
                     _isGenerating.value = false
                 }
@@ -1491,6 +1499,8 @@ class AbstraAiEngine(
     }
 
     companion object {
+        private const val TAG = "AbstraAiEngine"
+
         private const val PREF_AUDIO_INTELLIGENCE = "audio_intelligence_enabled"
         private const val PREF_AUDIO_ANALYSIS_DAY = "audio_analysis_day"
         private const val PREF_AUDIO_ANALYSIS_COUNT = "audio_analysis_count"
