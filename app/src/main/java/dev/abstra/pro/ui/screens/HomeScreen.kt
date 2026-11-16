@@ -7,6 +7,12 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.ui.graphics.Color
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -283,19 +289,7 @@ fun HomeScreen(
                             )
                         }
                         if (aiMixes.isEmpty()) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(14.dp),
-                                    strokeWidth = 2.dp,
-                                    color = colors.primaryStrong
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = "Building…",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = colors.textMuted
-                                )
-                            }
+                            GeneratingBadge(colors = colors)
                         } else {
                             Text(
                                 text = "On-Device",
@@ -313,6 +307,18 @@ fun HomeScreen(
                                     modifier = Modifier.size(17.dp)
                                 )
                             }
+                        }
+                    }
+
+                    if (aiMixes.isEmpty()) {
+                        // Premium skeleton: shimmering placeholders that mirror
+                        // the real mix cards, so the section has presence while
+                        // the on-device generation runs.
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(14.dp),
+                            contentPadding = PaddingValues(horizontal = 2.dp)
+                        ) {
+                            items(3) { SkeletonMixCard(colors) }
                         }
                     }
 
@@ -656,5 +662,120 @@ private fun formatListeningTime(ms: Long): String {
         hours > 0 -> "${hours}h ${minutes}m"
         totalMinutes > 0 -> "${totalMinutes}m"
         else -> "—"
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// AI Smart Mixes — generating state
+// ─────────────────────────────────────────────────────────────────
+
+/** Subtle pulsing badge shown in the section header while mixes generate. */
+@Composable
+private fun GeneratingBadge(colors: AbstraColors) {
+    val transition = rememberInfiniteTransition(label = "generatingBadge")
+    val pulse by transition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 850, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "generatingPulse"
+    )
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            modifier = Modifier
+                .size(7.dp)
+                .clip(CircleShape)
+                .background(colors.primaryStrong.copy(alpha = pulse))
+        )
+        Spacer(modifier = Modifier.width(7.dp))
+        Text(
+            text = "GENERATING ON-DEVICE",
+            style = MaterialTheme.typography.labelSmall,
+            color = colors.textMuted,
+            letterSpacing = 1.sp
+        )
+    }
+}
+
+/** Shimmering placeholder card that mirrors the real mix card geometry. */
+@Composable
+private fun SkeletonMixCard(colors: AbstraColors) {
+    val transition = rememberInfiniteTransition(label = "mixSkeleton")
+    val shimmerX by transition.animateFloat(
+        initialValue = -1.5f,
+        targetValue = 2.5f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1700, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "shimmerSweep"
+    )
+    val glow by transition.animateFloat(
+        initialValue = 0.12f,
+        targetValue = 0.3f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1000, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "noteGlow"
+    )
+    Box(
+        modifier = Modifier
+            .width(200.dp)
+            .height(130.dp)
+            .shadow(
+                8.dp, RoundedCornerShape(22.dp),
+                spotColor = colors.primary.copy(alpha = 0.25f)
+            )
+            .clip(RoundedCornerShape(22.dp))
+            .background(colors.primary.copy(alpha = 0.07f))
+            .drawBehind {
+                // A soft light band sweeping across the card.
+                val band = size.width * 0.7f
+                val start = size.width * shimmerX
+                drawRect(
+                    brush = Brush.linearGradient(
+                        colors = listOf(
+                            Color.Transparent,
+                            colors.primary.copy(alpha = 0.16f),
+                            Color.Transparent
+                        ),
+                        start = Offset(start, 0f),
+                        end = Offset(start + band, size.height)
+                    )
+                )
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            Icons.Default.MusicNote,
+            contentDescription = null,
+            tint = colors.primary.copy(alpha = glow),
+            modifier = Modifier.size(32.dp)
+        )
+        // Title / subtitle bars anchored where the real card's text sits.
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(112.dp)
+                    .height(10.dp)
+                    .clip(RoundedCornerShape(5.dp))
+                    .background(colors.primary.copy(alpha = glow + 0.08f))
+            )
+            Box(
+                modifier = Modifier
+                    .width(72.dp)
+                    .height(7.dp)
+                    .clip(RoundedCornerShape(3.5.dp))
+                    .background(colors.primary.copy(alpha = glow * 0.6f + 0.05f))
+            )
+        }
     }
 }
