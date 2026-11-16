@@ -19,6 +19,18 @@ data class MixPreset(
     val acousticnessTolerance: Float = 0.5f,
     val targetInstrumental: Float? = null,
 
+    /** Optional target rhythmic activity (audio-derived when available). */
+    val targetRhythmActivity: Float? = null,
+    val rhythmTolerance: Float = 0.3f,
+
+    /** Optional target spectral brightness (0 = dark, 1 = bright). */
+    val targetBrightness: Float? = null,
+
+    /** Optional tempo window in BPM; low-confidence estimates never
+     *  disqualify a track — they only fail to earn the tempo bonus. */
+    val targetTempoMinBpm: Float? = null,
+    val targetTempoMaxBpm: Float? = null,
+
     val preferredTags: Set<String> = emptySet(),
     val avoidedTags: Set<String> = emptySet(),
 

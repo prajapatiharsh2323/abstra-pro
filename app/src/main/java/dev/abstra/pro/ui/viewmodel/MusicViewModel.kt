@@ -598,6 +598,8 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     fun toggleFavorite(song: Song) {
         val nextState = !song.isFavorite
         _optimisticFavoriteState.value = _optimisticFavoriteState.value + (song.id to nextState)
+        // Favorites are strong, immediate feedback for the recommender.
+        aiEngine.onFavoriteToggled(song, nextState)
         viewModelScope.launch {
             repository.toggleFavorite(song.id, song.isFavorite)
             // Once the DB write returns and allSongs emits, we could drop the override,
@@ -628,12 +630,14 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun addSongToPlaylist(playlistId: Long, song: Song) {
+        aiEngine.onAddedToUserPlaylist(listOf(song.id))
         viewModelScope.launch {
             repository.addSongToPlaylist(playlistId, song.id)
         }
     }
 
     fun addSongsToPlaylist(playlistId: Long, songs: List<Song>) {
+        aiEngine.onAddedToUserPlaylist(songs.map { it.id })
         viewModelScope.launch {
             repository.addSongsToPlaylist(playlistId, songs.map { it.id })
         }

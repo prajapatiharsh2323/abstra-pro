@@ -4,9 +4,12 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import dev.abstra.pro.data.db.dao.AudioSignatureDao
 import dev.abstra.pro.data.db.dao.LibraryDao
+import dev.abstra.pro.data.db.dao.PlaybackFeedbackDao
 import dev.abstra.pro.data.db.dao.PlaylistDao
 import dev.abstra.pro.data.db.dao.SettingsDao
+import dev.abstra.pro.data.db.dao.SongNeighborDao
 import dev.abstra.pro.data.db.dao.SongProfileDao
 import dev.abstra.pro.data.db.dao.TelemetryDao
 import dev.abstra.pro.data.db.entities.*
@@ -26,9 +29,12 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         LyricsCacheEntity::class,
         WidgetPrefsEntity::class,
         SettingsEntity::class,
-        SongProfileEntity::class
+        SongProfileEntity::class,
+        AudioSignatureEntity::class,
+        SongNeighborEntity::class,
+        PlaybackFeedbackEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -37,6 +43,9 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun telemetryDao(): TelemetryDao
     abstract fun settingsDao(): SettingsDao
     abstract fun songProfileDao(): SongProfileDao
+    abstract fun audioSignatureDao(): AudioSignatureDao
+    abstract fun songNeighborDao(): SongNeighborDao
+    abstract fun playbackFeedbackDao(): PlaybackFeedbackDao
 
     companion object {
         @Volatile
@@ -115,6 +124,70 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v5 -> v6 adds the V2 recommendation tables (audio signatures,
+         * sparse song graph, playback feedback history). All existing user
+         * data (songs, overrides, playlists, telemetry, transitions,
+         * profiles, settings, lyrics) is preserved untouched.
+         */
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `audio_signatures` (" +
+                            "`songId` TEXT NOT NULL, " +
+                            "`mfccMeanBlob` BLOB NOT NULL, " +
+                            "`mfccStdBlob` BLOB NOT NULL, " +
+                            "`chromaBlob` BLOB NOT NULL, " +
+                            "`chromaConfidence` REAL NOT NULL, " +
+                            "`tempoBpm` REAL NOT NULL, " +
+                            "`tempoConfidence` REAL NOT NULL, " +
+                            "`rmsEnergy` REAL NOT NULL, " +
+                            "`dynamicRange` REAL NOT NULL, " +
+                            "`spectralCentroid` REAL NOT NULL, " +
+                            "`spectralFlux` REAL NOT NULL, " +
+                            "`onsetDensity` REAL NOT NULL, " +
+                            "`rhythmActivity` REAL NOT NULL, " +
+                            "`featureConfidence` REAL NOT NULL, " +
+                            "`extractorVersion` INTEGER NOT NULL, " +
+                            "`metadataFingerprint` TEXT NOT NULL, " +
+                            "`analyzedAtMs` INTEGER NOT NULL, " +
+                            "`analysisStatus` TEXT NOT NULL, " +
+                            "PRIMARY KEY(`songId`))"
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `song_neighbors` (" +
+                            "`songId` TEXT NOT NULL, " +
+                            "`neighborSongId` TEXT NOT NULL, " +
+                            "`edgeType` TEXT NOT NULL, " +
+                            "`similarity` REAL NOT NULL, " +
+                            "`graphVersion` INTEGER NOT NULL, " +
+                            "`updatedAtMs` INTEGER NOT NULL, " +
+                            "PRIMARY KEY(`songId`, `neighborSongId`, `edgeType`))"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_song_neighbors_neighborSongId` " +
+                            "ON `song_neighbors` (`neighborSongId`)"
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `playback_feedback` (" +
+                            "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                            "`songId` TEXT NOT NULL, " +
+                            "`eventType` TEXT NOT NULL, " +
+                            "`occurredAtMs` INTEGER NOT NULL, " +
+                            "`listenedMs` INTEGER NOT NULL, " +
+                            "`durationMs` INTEGER NOT NULL)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_playback_feedback_songId` " +
+                            "ON `playback_feedback` (`songId`)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_playback_feedback_occurredAtMs` " +
+                            "ON `playback_feedback` (`occurredAtMs`)"
+                )
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -122,7 +195,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "abstra_pro.db"
                 )
-                .addMigrations(MIGRATION_3_4, MIGRATION_4_5)
+                .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                 // Ancient, unsupported schema versions are rebuilt instead of
                 // crashing; every supported version (3, 4) upgrades in place.
                 .fallbackToDestructiveMigrationFrom(1, 2)

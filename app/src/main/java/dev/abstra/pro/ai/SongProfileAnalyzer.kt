@@ -360,6 +360,51 @@ object SongProfileAnalyzer {
     }
 
     /**
+     * Refines a metadata profile with a persisted [AudioSignature]. More
+     * dimensions are touched than with raw [AudioFeatures]: brightness and
+     * spectral movement inform the acoustic/instrumental picture only when
+     * the measurements are confident enough.
+     */
+    fun blendFeatures(metadata: SongProfile, signature: dev.abstra.pro.ai.model.AudioSignature): SongProfile {
+        val audioConfidence = signature.featureConfidence.coerceIn(0f, 1f)
+        if (audioConfidence <= 0f) return metadata
+
+        val blendedEnergy = combineFeatures(
+            metadataValue = metadata.energy,
+            metadataConfidence = metadata.energyConfidence,
+            audioValue = signature.rmsEnergy,
+            audioConfidence = audioConfidence
+        )
+
+        var acoustic = metadata.acousticness
+        var acousticConfidence = metadata.acousticConfidence
+        if (signature.spectralCentroid > 0f) {
+            // Bright, synthetic spectra suggest produced/non-acoustic material;
+            // dark, sparse spectra lean acoustic. A weak, confidence-damped push.
+            val brightnessPush = (0.5f - signature.spectralCentroid) * 0.35f
+            val blendedAcoustic = (acoustic + brightnessPush * audioConfidence).coerceIn(0f, 1f)
+            acoustic = combineFeatures(
+                metadataValue = acoustic,
+                metadataConfidence = acousticConfidence,
+                audioValue = blendedAcoustic,
+                audioConfidence = audioConfidence * 0.5f
+            )
+            acousticConfidence = min(1f, acousticConfidence + audioConfidence * 0.25f)
+        }
+
+        val newEnergyConfidence = min(1f, metadata.energyConfidence + audioConfidence * 0.5f)
+
+        return metadata.copy(
+            energy = blendedEnergy.coerceIn(0f, 1f),
+            acousticness = acoustic,
+            acousticConfidence = acousticConfidence,
+            rhythmActivity = signature.rhythmActivity.coerceIn(0f, 1f),
+            energyConfidence = newEnergyConfidence,
+            profileSource = PROFILE_SOURCE_BLENDED
+        )
+    }
+
+    /**
      * Are two genres related enough to count as a smooth transition?
      * Returns 1.0 (same family or broader group), 0.6 (no data), or
      * 0.4 (different families).

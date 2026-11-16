@@ -1,4 +1,4 @@
-package dev.abstra.pro.ai
+package dev.abstra.pro.ai.audio
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull

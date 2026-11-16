@@ -1,4 +1,4 @@
-package dev.abstra.pro.ai
+package dev.abstra.pro.ai.audio
 
 import android.content.Context
 import android.media.MediaCodec
@@ -7,20 +7,22 @@ import android.media.MediaFormat
 import android.net.Uri
 import android.os.Build
 import android.util.Log
-import dev.abstra.pro.ai.model.AudioFeatures
+import dev.abstra.pro.ai.model.AudioSignature
 import dev.abstra.pro.data.model.Song
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.nio.ByteOrder
 import kotlin.coroutines.coroutineContext
+import kotlin.math.min
 
 /**
  * Optional local audio analysis.
  *
  * Decodes a small number of bounded PCM windows (never the whole track) with
- * Android's native media APIs, computes simple signal features, and never
- * blocks playlist generation: any failure simply returns null and the
+ * Android's native media APIs, computes compact audio signatures (timbre,
+ * chroma, tempo, scalar dynamics), and never blocks playlist generation: any
+ * failure simply returns null / an UNSUPPORTED or FAILED status and the
  * metadata-only profile stays in place.
  *
  * Rules enforced here:
@@ -47,12 +49,31 @@ class AudioFeatureExtractor(private val context: Context) {
         private const val WINDOW_TIMEOUT_MS = 12_000L
     }
 
-    suspend fun extract(song: Song): AudioFeatures? = withContext(Dispatchers.IO) {
-        runCatching { extractInternal(song) }.getOrNull()
+    /**
+     * Extracts a full audio signature, or null when the file cannot be read
+     * or decoded at all. [onStatus] receives UNSUPPORTED/FAILED hints so the
+     * caller can persist the outcome and never retry hopeless files.
+     */
+    suspend fun extract(
+        song: Song,
+        onStatus: ((String) -> Unit)? = null
+    ): AudioSignature? = withContext(Dispatchers.IO) {
+        runCatching { extractInternal(song, onStatus) }
+            .getOrElse {
+                if (it is kotlinx.coroutines.CancellationException) throw it
+                onStatus?.invoke(AudioSignature.STATUS_FAILED)
+                null
+            }
     }
 
-    private suspend fun extractInternal(song: Song): AudioFeatures? {
-        if (song.durationMs <= 0L) return null
+    private suspend fun extractInternal(
+        song: Song,
+        onStatus: ((String) -> Unit)?
+    ): AudioSignature? {
+        if (song.durationMs <= 0L) {
+            onStatus?.invoke(AudioSignature.STATUS_UNSUPPORTED)
+            return null
+        }
         val extractor = MediaExtractor()
         var codec: MediaCodec? = null
         try {
@@ -70,15 +91,21 @@ class AudioFeatureExtractor(private val context: Context) {
                     break
                 }
             }
-            if (audioTrackIndex < 0 || format == null) return null
-            val mime = format.getString(MediaFormat.KEY_MIME) ?: return null
+            if (audioTrackIndex < 0 || format == null) {
+                onStatus?.invoke(AudioSignature.STATUS_UNSUPPORTED)
+                return null
+            }
+            val mime = format.getString(MediaFormat.KEY_MIME) ?: run {
+                onStatus?.invoke(AudioSignature.STATUS_UNSUPPORTED)
+                return null
+            }
             extractor.selectTrack(audioTrackIndex)
 
             codec = MediaCodec.createDecoderByType(mime)
             codec.configure(format, null, null, 0)
             codec.start()
 
-            val results = mutableListOf<DspResult>()
+            val results = mutableListOf<SignatureDspResult>()
             for (position in WINDOW_POSITIONS) {
                 coroutineContext.ensureActive()
                 if (results.size >= WINDOW_COUNT) break
@@ -94,33 +121,20 @@ class AudioFeatureExtractor(private val context: Context) {
                     startUs = startUs,
                     windowSeconds = WINDOW_SECONDS
                 ) ?: continue
-                AudioDsp.computeFeatures(pcm.first, pcm.second, WINDOW_SECONDS)?.let { results += it }
+                AudioDsp.computeSignatureFeatures(pcm.first, pcm.second, WINDOW_SECONDS)
+                    ?.let { results += it }
             }
             codec.stop()
 
-            if (results.isEmpty()) return null
-
-            val count = results.size
-            val coverage = results.map { it.coverage }.average().toFloat()
-            val confidence = (0.4f + 0.6f * coverage * (count.toFloat() / WINDOW_COUNT))
-                .coerceIn(0f, 0.95f)
-
-            fun avg(select: (DspResult) -> Float) = results.map(select).average().toFloat()
-
-            return AudioFeatures(
-                songId = song.id,
-                rmsEnergy = avg { it.rmsEnergy },
-                dynamicRange = avg { it.dynamicRange },
-                spectralCentroid = avg { it.spectralCentroid },
-                spectralFlux = avg { it.spectralFlux },
-                onsetDensity = avg { it.onsetDensity },
-                rhythmActivity = avg { it.rhythmActivity },
-                confidence = confidence,
-                analyzedAtMs = System.currentTimeMillis()
-            )
+            if (results.isEmpty()) {
+                onStatus?.invoke(AudioSignature.STATUS_FAILED)
+                return null
+            }
+            return aggregate(song, results)
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             Log.d(TAG, "Audio analysis skipped for ${song.title}: ${e.message}")
+            onStatus?.invoke(AudioSignature.STATUS_FAILED)
             return null
         } finally {
             try {
@@ -133,6 +147,72 @@ class AudioFeatureExtractor(private val context: Context) {
                 extractor.release()
             } catch (_: Exception) {}
         }
+    }
+
+    /**
+     * Pools per-window features into one signature. MFCC statistics are
+     * averaged across windows; chroma is averaged and renormalized; tempo
+     * comes from the window with the strongest estimate.
+     */
+    private fun aggregate(song: Song, results: List<SignatureDspResult>): AudioSignature {
+        fun avg(select: (SignatureDspResult) -> Float) = results.map(select).average().toFloat()
+        val count = results.size
+
+        val coverage = results.map { it.coverage }.average().toFloat()
+        val confidence = (0.4f + 0.6f * coverage * (count.toFloat() / WINDOW_COUNT))
+            .coerceIn(0f, 0.95f)
+
+        val mfccMean = FloatArray(AudioSignature.MFCC_COUNT)
+        for (i in mfccMean.indices) mfccMean[i] = results.map { it.mfccMean[i] }.average().toFloat()
+        val mfccStd = FloatArray(AudioSignature.MFCC_COUNT)
+        for (i in mfccStd.indices) mfccStd[i] = results.map { it.mfccStd[i] }.average().toFloat()
+
+        // Chroma: only average windows with meaningful confidence.
+        val tonalWindows = results.filter { it.chromaConfidence > 0.15f }
+        var chroma = FloatArray(AudioSignature.CHROMA_COUNT)
+        var chromaConfidence = 0f
+        if (tonalWindows.isNotEmpty()) {
+            var sum = 0f
+            chroma = FloatArray(AudioSignature.CHROMA_COUNT) { i ->
+                val v = tonalWindows.map { it.chroma[i] }.average().toFloat().also { sum += it }
+                v
+            }
+            if (sum > 1e-6f) {
+                for (i in chroma.indices) chroma[i] /= sum
+                chromaConfidence = tonalWindows.map { it.chromaConfidence }.average().toFloat()
+            }
+        }
+
+        // Tempo: trust the most confident window that produces an estimate.
+        var tempoBpm = 0f
+        var tempoConfidence = 0f
+        for (result in results) {
+            if (result.tempoConfidence > tempoConfidence) {
+                tempoBpm = result.tempoBpm
+                tempoConfidence = result.tempoConfidence
+            }
+        }
+
+        return AudioSignature(
+            songId = song.id,
+            mfccMean = mfccMean,
+            mfccStd = mfccStd,
+            chroma = chroma,
+            chromaConfidence = chromaConfidence,
+            tempoBpm = tempoBpm,
+            tempoConfidence = tempoConfidence,
+            rmsEnergy = avg { it.rmsEnergy },
+            dynamicRange = avg { it.dynamicRange },
+            spectralCentroid = avg { it.spectralCentroid },
+            spectralFlux = avg { it.spectralFlux },
+            onsetDensity = avg { it.onsetDensity },
+            rhythmActivity = avg { it.rhythmActivity },
+            featureConfidence = confidence,
+            extractorVersion = AudioSignature.EXTRACTOR_VERSION,
+            metadataFingerprint = song.id, // replaced by engine with the real fingerprint
+            analysisStatus = AudioSignature.STATUS_SUCCESS,
+            analyzedAtMs = System.currentTimeMillis()
+        )
     }
 
     private fun setDataSource(extractor: MediaExtractor, song: Song) {

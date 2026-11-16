@@ -14,10 +14,25 @@ data class CachedPlaylist(
     val totalDurationMs: Long = 0L
 )
 
-/** Persisted daily mix cache. Generation is reproducible via date + seed. */
+/**
+ * Persisted daily mix cache with rich invalidation metadata. Generation is
+ * reproducible via date + seed; the cache is only reused while every
+ * fingerprint matches, so material changes to the library, metadata, audio
+ * graph, algorithms, presets or user taste trigger regeneration.
+ */
 data class MixCacheData(
     val dateKey: String,
     val libraryFingerprint: String,
+    /** Hash over the effective metadata of the whole library. */
+    val metadataFingerprint: String = "",
+    /** Version of the audio signature / similarity graph. */
+    val graphVersion: Int = 0,
+    /** Version of the recommendation algorithm. */
+    val algorithmVersion: Int = 0,
+    /** Version of the preset configuration. */
+    val presetVersion: Int = 0,
+    /** Revision counter of meaningful user taste changes. */
+    val tasteRevision: Long = 0L,
     /** Base seed shared by all presets of one daily generation. */
     val baseSeed: Long = 0L,
     val playlists: List<CachedPlaylist> = emptyList()
@@ -50,6 +65,6 @@ class MixCache(context: Context) {
 
     companion object {
         private const val PREFS_NAME = "abstra_prefs"
-        private const val KEY_CACHE = "ai_mix_cache_v1"
+        private const val KEY_CACHE = "ai_mix_cache_v2"
     }
 }
