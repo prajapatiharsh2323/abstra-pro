@@ -7,9 +7,11 @@ import dev.abstra.pro.ai.audio.AudioSimilarity
 import dev.abstra.pro.ai.graph.PersonalizedPageRank
 import dev.abstra.pro.ai.graph.RobustScaler
 import dev.abstra.pro.ai.graph.SongGraphBuilder
+import dev.abstra.pro.ai.learning.PlaybackSessionTracker
 import dev.abstra.pro.ai.model.AudioSignature
 import dev.abstra.pro.ai.model.DayType
 import dev.abstra.pro.ai.model.GeneratedPlaylist
+import dev.abstra.pro.ai.model.MixStrategy
 import dev.abstra.pro.ai.model.PlaylistRequest
 import dev.abstra.pro.ai.model.RecommendationReason
 import dev.abstra.pro.ai.model.RecommendedTrack
@@ -152,19 +154,91 @@ class AbstraAiEngine(
     private var pendingTasteEvents = 0
 
     // ── Playback session tracking (meaningful plays, real listened time) ──
-    private class PlaybackSession(
-        val songId: String,
-        val durationMs: Long,
-        val startedAtMs: Long,
-        var lastPositionMs: Long,
-        var listenedMs: Long,
-        var persistedListenedMs: Long,
-        var meaningfulCounted: Boolean
-    )
+    //
+    // All session state lives in [sessionTracker] (lock-guarded); this engine
+    // only implements the asynchronous persistence of the tracker's decisions.
+    private val sessionTracker = PlaybackSessionTracker(
+        scope = engineScope,
+        sink = object : PlaybackSessionTracker.Sink {
+            override suspend fun onMeaningfulPlay(
+                snapshot: PlaybackSessionTracker.SessionSnapshot,
+                isReplay: Boolean
+            ) {
+                val now = System.currentTimeMillis()
+                val timeOfDay = TimeOfDay.current()
+                val isWeekend = DayType.current() == DayType.WEEKEND
+                updateTelemetry(snapshot.songId) { cur ->
+                    cur.copy(
+                        playCount = cur.playCount + 1,
+                        repeatCount = if (isReplay) cur.repeatCount + 1 else cur.repeatCount,
+                        lastPlayedTimestamp = now,
+                        totalPlayedMs = cur.totalPlayedMs + snapshot.listenedMs,
+                        consecutiveSkips = 0,
+                        morningPlays = if (timeOfDay == TimeOfDay.MORNING) cur.morningPlays + 1 else cur.morningPlays,
+                        afternoonPlays = if (timeOfDay == TimeOfDay.AFTERNOON) cur.afternoonPlays + 1 else cur.afternoonPlays,
+                        eveningPlays = if (timeOfDay == TimeOfDay.EVENING) cur.eveningPlays + 1 else cur.eveningPlays,
+                        nightPlays = if (timeOfDay == TimeOfDay.NIGHT) cur.nightPlays + 1 else cur.nightPlays,
+                        weekdayPlays = if (!isWeekend) cur.weekdayPlays + 1 else cur.weekdayPlays,
+                        weekendPlays = if (isWeekend) cur.weekendPlays + 1 else cur.weekendPlays
+                    )
+                }
+                recordFeedback(
+                    snapshot.songId,
+                    if (isReplay) {
+                        PlaybackFeedbackEntity.EVENT_REPLAY
+                    } else {
+                        PlaybackFeedbackEntity.EVENT_MEANINGFUL_PLAY
+                    },
+                    listenedMs = snapshot.listenedMs,
+                    durationMs = snapshot.durationMs
+                )
+            }
 
-    private var session: PlaybackSession? = null
-    private var lastMeaningfulSongId: String? = null
-    private var lastMeaningfulTimeMs: Long = 0L
+            override suspend fun onFastSkip(snapshot: PlaybackSessionTracker.SessionSnapshot) {
+                updateTelemetry(snapshot.songId) { cur ->
+                    cur.copy(
+                        fastSkips = cur.fastSkips + 1,
+                        consecutiveSkips = cur.consecutiveSkips + 1
+                    )
+                }
+                recordFeedback(
+                    snapshot.songId,
+                    PlaybackFeedbackEntity.EVENT_FAST_SKIP,
+                    listenedMs = snapshot.listenedMs,
+                    durationMs = snapshot.durationMs
+                )
+            }
+
+            override suspend fun onCompletion(snapshot: PlaybackSessionTracker.SessionSnapshot) {
+                updateTelemetry(snapshot.songId) { cur ->
+                    cur.copy(
+                        fullCompletions = cur.fullCompletions + 1,
+                        consecutiveSkips = 0
+                    )
+                }
+                recordFeedback(
+                    snapshot.songId,
+                    PlaybackFeedbackEntity.EVENT_COMPLETION,
+                    listenedMs = snapshot.listenedMs,
+                    durationMs = snapshot.durationMs
+                )
+            }
+
+            override suspend fun onListenedDelta(
+                snapshot: PlaybackSessionTracker.SessionSnapshot,
+                deltaMs: Long
+            ) {
+                if (deltaMs <= 0L) return
+                updateTelemetry(snapshot.songId) { cur ->
+                    cur.copy(totalPlayedMs = cur.totalPlayedMs + deltaMs)
+                }
+            }
+
+            override suspend fun onTransition(fromSongId: String, toSongId: String) {
+                recordTransition(fromSongId, toSongId)
+            }
+        }
+    )
 
     // ── Optional audio intelligence ──
     @Volatile
@@ -189,97 +263,27 @@ class AbstraAiEngine(
 
     fun onSongStarted(song: Song) {
         if (closed) return
-        // Finalize any dangling session defensively (e.g. manual replay).
-        session?.let { s -> engineScope.launch { applySessionEnd(s, completed = false, treatAsSkip = true) } }
-        session = PlaybackSession(
-            songId = song.id,
-            durationMs = song.durationMs,
-            startedAtMs = System.currentTimeMillis(),
-            lastPositionMs = 0L,
-            listenedMs = 0L,
-            persistedListenedMs = 0L,
-            meaningfulCounted = false
-        )
-
-        // Markov transition recorded only after a meaningful previous session.
-        val prev = lastMeaningfulSongId
-        if (prev != null && prev != song.id) {
-            engineScope.launch { recordTransition(prev, song.id) }
-        }
+        sessionTracker.onSongStarted(song)
     }
 
     fun onSongProgress(song: Song, positionMs: Long, durationMs: Long) {
         if (closed) return
-        val s = session ?: return
-        if (s.songId != song.id) return
-        val delta = positionMs - s.lastPositionMs
-        // Progress ticks are ~5s apart; larger jumps are seeks and do not
-        // count as listening. A normal seek is never a dislike.
-        if (delta in 1..PROGRESS_TICK_MAX_MS) s.listenedMs += delta
-        s.lastPositionMs = positionMs
-        if (!s.meaningfulCounted && s.listenedMs >= meaningfulThresholdMs(s.durationMs)) {
-            engineScope.launch { countMeaningfulPlay(s) }
-        }
+        sessionTracker.onSongProgress(song, positionMs, durationMs)
     }
 
     fun onSongCompleted(song: Song) {
         if (closed) return
-        val s = session
-        if (s != null && s.songId == song.id) {
-            // Reaching the end counts the remaining part as listened time.
-            s.listenedMs += (s.durationMs - s.lastPositionMs).coerceAtLeast(0L)
-            engineScope.launch {
-                applySessionEnd(s, completed = true, treatAsSkip = false)
-            }
-        } else {
-            engineScope.launch {
-                updateTelemetry(song.id) { cur ->
-                    cur.copy(
-                        fullCompletions = cur.fullCompletions + 1,
-                        consecutiveSkips = 0
-                    )
-                }
-                recordFeedback(song.id, PlaybackFeedbackEntity.EVENT_COMPLETION)
-            }
-        }
-        session = null
+        sessionTracker.onSongCompleted(song)
     }
 
     fun onSongSkipped(song: Song, playedSeconds: Long, totalDurationSeconds: Long) {
         if (closed) return
-        val s = session
-        engineScope.launch {
-            if (s != null && s.songId == song.id) {
-                applySessionEnd(s, completed = false, treatAsSkip = true)
-            } else {
-                // No live session (callbacks restarted); approximate from the
-                // reported played time so fast skips still register.
-                val approx = PlaybackSession(
-                    songId = song.id,
-                    durationMs = totalDurationSeconds * 1000L,
-                    startedAtMs = 0L,
-                    lastPositionMs = playedSeconds * 1000L,
-                    listenedMs = playedSeconds * 1000L,
-                    persistedListenedMs = 0L,
-                    meaningfulCounted = false
-                )
-                applySessionEnd(approx, completed = false, treatAsSkip = true)
-            }
-        }
-        session = null
+        sessionTracker.onSongSkipped(song, playedSeconds, totalDurationSeconds)
     }
 
     fun onPlaybackPaused(song: Song) {
         if (closed) return
-        val s = session ?: return
-        if (s.songId != song.id) return
-        engineScope.launch {
-            if (!s.meaningfulCounted && s.listenedMs >= meaningfulThresholdMs(s.durationMs)) {
-                countMeaningfulPlay(s)
-            } else {
-                persistListenedDelta(s)
-            }
-        }
+        sessionTracker.onPlaybackPaused(song)
     }
 
     fun setPlaybackActive(active: Boolean) {
@@ -313,113 +317,6 @@ class AbstraAiEngine(
                     bumpTasteRevision = true
                 )
             }
-        }
-    }
-
-    private fun meaningfulThresholdMs(durationMs: Long): Long {
-        // Short tracks: 20% of duration (at least 8s). Everything else: 30s.
-        return if (durationMs in 1..180_000) {
-            (durationMs * 0.2f).toLong().coerceAtLeast(8_000L)
-        } else {
-            30_000L
-        }
-    }
-
-    private fun isFastSkip(s: PlaybackSession): Boolean {
-        val ratio = if (s.durationMs > 0) s.listenedMs.toFloat() / s.durationMs else 0f
-        return s.listenedMs <= FAST_SKIP_MS || ratio < FAST_SKIP_RATIO
-    }
-
-    private suspend fun countMeaningfulPlay(s: PlaybackSession) {
-        if (s.meaningfulCounted) return
-        val now = System.currentTimeMillis()
-        val isReplay = lastMeaningfulSongId == s.songId &&
-                (now - lastMeaningfulTimeMs) < REPLAY_WINDOW_MS
-        val listenedDelta = (s.listenedMs - s.persistedListenedMs).coerceAtLeast(0L)
-        val timeOfDay = TimeOfDay.current()
-        val isWeekend = DayType.current() == DayType.WEEKEND
-        updateTelemetry(s.songId) { cur ->
-            cur.copy(
-                playCount = cur.playCount + 1,
-                repeatCount = if (isReplay) cur.repeatCount + 1 else cur.repeatCount,
-                lastPlayedTimestamp = now,
-                totalPlayedMs = cur.totalPlayedMs + listenedDelta,
-                consecutiveSkips = 0,
-                morningPlays = if (timeOfDay == TimeOfDay.MORNING) cur.morningPlays + 1 else cur.morningPlays,
-                afternoonPlays = if (timeOfDay == TimeOfDay.AFTERNOON) cur.afternoonPlays + 1 else cur.afternoonPlays,
-                eveningPlays = if (timeOfDay == TimeOfDay.EVENING) cur.eveningPlays + 1 else cur.eveningPlays,
-                nightPlays = if (timeOfDay == TimeOfDay.NIGHT) cur.nightPlays + 1 else cur.nightPlays,
-                weekdayPlays = if (!isWeekend) cur.weekdayPlays + 1 else cur.weekdayPlays,
-                weekendPlays = if (isWeekend) cur.weekendPlays + 1 else cur.weekendPlays
-            )
-        }
-        s.persistedListenedMs = s.listenedMs
-        s.meaningfulCounted = true
-        lastMeaningfulSongId = s.songId
-        lastMeaningfulTimeMs = now
-
-        recordFeedback(
-            s.songId,
-            if (isReplay) {
-                PlaybackFeedbackEntity.EVENT_REPLAY
-            } else {
-                PlaybackFeedbackEntity.EVENT_MEANINGFUL_PLAY
-            },
-            listenedMs = s.listenedMs,
-            durationMs = s.durationMs
-        )
-    }
-
-    private suspend fun persistListenedDelta(s: PlaybackSession) {
-        val delta = (s.listenedMs - s.persistedListenedMs).coerceAtLeast(0L)
-        if (delta <= 0L) return
-        updateTelemetry(s.songId) { cur ->
-            cur.copy(totalPlayedMs = cur.totalPlayedMs + delta)
-        }
-        s.persistedListenedMs = s.listenedMs
-    }
-
-    private suspend fun applySessionEnd(
-        s: PlaybackSession,
-        completed: Boolean,
-        treatAsSkip: Boolean
-    ) {
-        val threshold = meaningfulThresholdMs(s.durationMs)
-        val meaningful = completed || s.listenedMs >= threshold
-
-        if (meaningful && !s.meaningfulCounted) {
-            countMeaningfulPlay(s)
-        } else {
-            persistListenedDelta(s)
-        }
-
-        // A normal manual Next after meaningful listening is NOT a dislike.
-        if (!meaningful && treatAsSkip && isFastSkip(s)) {
-            updateTelemetry(s.songId) { cur ->
-                cur.copy(
-                    fastSkips = cur.fastSkips + 1,
-                    consecutiveSkips = cur.consecutiveSkips + 1
-                )
-            }
-            recordFeedback(
-                s.songId,
-                PlaybackFeedbackEntity.EVENT_FAST_SKIP,
-                listenedMs = s.listenedMs,
-                durationMs = s.durationMs
-            )
-        }
-
-        if (completed) {
-            updateTelemetry(s.songId) { cur ->
-                cur.copy(fullCompletions = cur.fullCompletions + 1, consecutiveSkips = 0)
-            }
-            recordFeedback(
-                s.songId,
-                PlaybackFeedbackEntity.EVENT_COMPLETION,
-                listenedMs = s.listenedMs,
-                durationMs = s.durationMs,
-                bumpTasteRevision = false
-            )
         }
     }
 
@@ -551,7 +448,7 @@ class AbstraAiEngine(
     }
 
     fun onSongsDeleted(songIds: List<String>) {
-        songIds.forEach { profileCache.remove(it); signatureCache.remove(it) }
+        songIds.forEach { profileCache.remove(it); signatureCache.remove(it); telemetryCache.remove(it) }
         engineScope.launch {
             runCatching {
                 graphBuilder.removeSongs(songIds)
@@ -559,6 +456,7 @@ class AbstraAiEngine(
                     profileDao.deleteProfile(id)
                     signatureDao.deleteSignature(id)
                     feedbackDao.deleteEventsForSong(id)
+                    telemetryDao.deleteTransitionsTouching(id)
                 }
                 graphDirty = true
             }
@@ -772,6 +670,11 @@ class AbstraAiEngine(
 
         val favoriteIds = allSongs.filter { it.isFavorite }.map { it.id }.toSet()
         val recentlyPlayed = readRecentlyPlayedIds()
+        val contextBucket = TimeOfDay.current().name
+
+        // Spotlight artist for the Artist Spotlight mix (decayed preference,
+        // never the raw play-count sum).
+        val spotlightArtistSongIds = pickSpotlightArtistTracks(allSongs, trackTastes, artistTastes)
 
         // Daily cache: reuse while every fingerprint matches.
         val fingerprint = libraryFingerprint(allSongs)
@@ -780,13 +683,16 @@ class AbstraAiEngine(
         val cache = mixCache.load()
 
         if (!forceRefresh && cache != null &&
-            cache.dateKey == dateKey &&
-            cache.libraryFingerprint == fingerprint &&
-            cache.metadataFingerprint == metadataFp &&
-            cache.graphVersion == currentGraphVersion() &&
-            cache.algorithmVersion == ALGORITHM_VERSION &&
-            cache.presetVersion == PRESET_VERSION &&
-            cache.tasteRevision == tasteRevision
+            cache.isFresh(
+                dateKey = dateKey,
+                libraryFingerprint = fingerprint,
+                metadataFingerprint = metadataFp,
+                graphVersion = currentGraphVersion(),
+                algorithmVersion = ALGORITHM_VERSION,
+                presetVersion = PRESET_VERSION,
+                tasteRevision = tasteRevision,
+                contextBucket = contextBucket
+            )
         ) {
             val restored = restoreFromCache(cache, songById)
             if (restored.isNotEmpty()) {
@@ -803,25 +709,33 @@ class AbstraAiEngine(
 
         val generated = mutableListOf<GeneratedPlaylist>()
         for (preset in MixPresetCatalog.presets) {
+            // Time of Day adapts to the actual current bucket — targets and
+            // title change with the moment of generation.
+            val bucket = TimeOfDay.current()
+            val effectivePreset = if (preset.strategy == MixStrategy.TIME_OF_DAY) {
+                MixPresetCatalog.timeOfDayPreset(bucket)
+            } else preset
+
             val request = PlaylistRequest(
                 mood = preset.id,
-                targetDurationMs = preset.targetDurationMs,
-                discoveryRatio = preset.discoveryRatio,
-                excludeRecentlyPlayed = preset.excludeRecentlyPlayed,
+                targetDurationMs = effectivePreset.targetDurationMs,
+                discoveryRatio = effectivePreset.discoveryRatio,
+                excludeRecentlyPlayed = effectivePreset.excludeRecentlyPlayed,
                 seedSongId = null,
                 refreshSeed = MixPresetCatalog.seedFor(preset, baseSeed)
             )
             val playlist = computePlaylist(
                 allSongs = allSongs,
                 profiles = profiles,
-                preset = preset,
+                preset = effectivePreset,
                 request = request,
                 trackTastes = trackTastes,
                 artistTastes = artistTastes,
                 genreTastes = genreTastes,
                 pprScores = pprScores,
                 favoriteIds = favoriteIds,
-                recentlyPlayed = recentlyPlayed
+                recentlyPlayed = recentlyPlayed,
+                spotlightArtistSongIds = spotlightArtistSongIds
             ) ?: continue
             generated += playlist
         }
@@ -836,6 +750,7 @@ class AbstraAiEngine(
                     algorithmVersion = ALGORITHM_VERSION,
                     presetVersion = PRESET_VERSION,
                     tasteRevision = tasteRevision,
+                    contextBucket = contextBucket,
                     baseSeed = baseSeed,
                     playlists = generated.map { gp ->
                         CachedPlaylist(
@@ -854,6 +769,73 @@ class AbstraAiEngine(
         }
         enqueueLibraryAnalysis(allSongs)
         return generated
+    }
+
+    /**
+     * Smart next-track suggestion: the historical Markov transition from the
+     * current song, its audio neighbourhood, and earned preference.
+     *
+     * Never returns a track present in [history] (the caller's exclusions are
+     * hard constraints) and returns null when no eligible candidate exists —
+     * there is no random fallback. Does not modify the user's queue.
+     */
+    suspend fun suggestNextSong(
+        currentSong: Song,
+        history: List<Song>,
+        pool: List<Song>
+    ): Song? = withContext(Dispatchers.Default) {
+        if (closed || pool.isEmpty()) return@withContext null
+        val excluded = history.mapTo(HashSet()) { it.id } + currentSong.id
+        val candidates = pool
+            .filter { it.id !in excluded }
+            .sortedBy { it.id } // deterministic base order
+        if (candidates.isEmpty()) return@withContext null
+
+        ensureTelemetryLoaded()
+        val tastes = ensureTrackTastes(prefs.getLong(PREF_TASTE_REVISION, 0L))
+        val transitions = loadTransitions()
+        val outgoingTotal = transitions.second[currentSong.id] ?: 0
+        val neighborRank = HashMap<String, Int>()
+        audioNeighbourMap[currentSong.id]?.forEachIndexed { index, id ->
+            if (id !in neighborRank) neighborRank[id] = index
+        }
+        val currentSignature = signatureCache[currentSong.id]
+
+        data class Scored(val song: Song, val value: Float)
+
+        val scored = candidates.map { song ->
+            var value = 0f
+            val transitionCount = transitions.first[currentSong.id]?.get(song.id)
+            if (transitionCount != null && outgoingTotal > 0) {
+                value += 0.50f * minOf(1f, transitionCount.toFloat() / outgoingTotal * 3f)
+            }
+            neighborRank[song.id]?.let { rank ->
+                value += 0.25f * (1f / (rank + 1))
+            }
+            val taste = tastes[song.id]
+            if (taste != null && taste.confidence > 0f) {
+                value += 0.15f * taste.positive * taste.confidence
+            }
+            if (currentSignature != null) {
+                val sig = signatureCache[song.id]
+                val sim = if (sig != null) {
+                    AudioSimilarity.similarity(currentSignature, sig, scaler)
+                } else null
+                if (sim != null) value += 0.10f * sim
+            }
+            Scored(song, value)
+        }.sortedWith(compareByDescending<Scored> { it.value }.thenBy { it.song.id })
+
+        val best = scored.first()
+        when {
+            best.value > 0f -> best.song
+            // No signal at all: fall back to the highest earned preference
+            // among eligible candidates — deterministic, never random.
+            else -> candidates.maxByOrNull { song ->
+                val taste = tastes[song.id]
+                taste?.positive?.times(taste.confidence) ?: 0f
+            }
+        }
     }
 
     /** Generates a single playlist for an explicit request. */
@@ -881,10 +863,13 @@ class AbstraAiEngine(
                 } else emptyMap()
 
                 val preset = MixPresetCatalog.byId(request.mood)
+                val effectivePreset = if (preset.strategy == MixStrategy.TIME_OF_DAY) {
+                    MixPresetCatalog.timeOfDayPreset(TimeOfDay.current())
+                } else preset
                 computePlaylist(
                     allSongs = allSongs,
                     profiles = profiles,
-                    preset = preset,
+                    preset = effectivePreset,
                     request = request,
                     trackTastes = trackTastes,
                     artistTastes = artistTastes,
@@ -906,7 +891,8 @@ class AbstraAiEngine(
         genreTastes: Map<String, UserTasteModel.AggregateTaste>,
         pprScores: Map<String, Float>,
         favoriteIds: Set<String>,
-        recentlyPlayed: Set<String>
+        recentlyPlayed: Set<String>,
+        spotlightArtistSongIds: List<String> = emptyList()
     ): GeneratedPlaylist? {
         val nowMs = System.currentTimeMillis()
         val songById = allSongs.associateBy { it.id }
@@ -918,8 +904,14 @@ class AbstraAiEngine(
             outgoingTotals = transitions.second
         )
 
-        // Anchor songs for retrieval: favorites and current-session songs.
-        val sessionAnchors = recentlyPlayed.take(3)
+        // Anchor songs for retrieval: recent session songs plus preset-strategy
+        // anchors (the spotlight artist, or time-of-day bucket evidence).
+        val strategyAnchors = when (preset.strategy) {
+            MixStrategy.ARTIST_SPOTLIGHT -> spotlightArtistSongIds
+            MixStrategy.TIME_OF_DAY -> timeBucketAnchors(allSongs)
+            else -> emptyList()
+        }
+        val sessionAnchors = (recentlyPlayed.take(3) + strategyAnchors).distinct()
 
         val retriever = CandidateRetriever(
             songs = allSongs,
@@ -930,7 +922,11 @@ class AbstraAiEngine(
             pprScores = pprScores,
             trackTastes = trackTastes,
             favoriteIds = favoriteIds,
-            anchorSongIds = sessionAnchors
+            anchorSongIds = sessionAnchors,
+            telemetry = telemetryCache,
+            spotlightSongIds = if (preset.strategy == MixStrategy.ARTIST_SPOTLIGHT) {
+                spotlightArtistSongIds
+            } else emptyList()
         )
         val retrieved = retriever.retrieve(preset, request.seedSongId)
 
@@ -1009,6 +1005,18 @@ class AbstraAiEngine(
             )
         )
         if (tracks.isEmpty()) return null
+
+        // Debug-only structured diagnostics: why the top candidates were
+        // selected. Never shown as percentages in the production UI.
+        if (Log.isLoggable(TAG, Log.DEBUG)) {
+            val scoredById = ranked.associateBy { it.input.song.id }
+            val summary = tracks.take(DEBUG_DIAGNOSTICS_TRACKS).mapNotNull { track ->
+                val scored = scoredById[track.songId] ?: return@mapNotNull null
+                val d = PlaylistRanker.diagnostics(scored)
+                "${track.songId}(${d.reasonCodes.joinToString("+")}, c=${"%.2f".format(d.confidence)})"
+            }
+            Log.d(TAG, "[${preset.id}] sequence diagnostics: ${summary.joinToString("; ")}")
+        }
 
         val totalDurationMs = tracks.sumOf { songById[it.songId]?.durationMs ?: 0L }
         return GeneratedPlaylist(
@@ -1131,6 +1139,80 @@ class AbstraAiEngine(
 
     // ── Seeds and taste ──
 
+    /**
+     * The Artist Spotlight artist is chosen by earned, decayed preference
+     * (smoothed artist taste), never by the raw number of plays or tracks.
+     * Raw play counts enter only as a weak tie-break fallback so a cold
+     * library still has a spotlight.
+     */
+    private fun pickSpotlightArtistTracks(
+        allSongs: List<Song>,
+        trackTastes: Map<String, UserTasteModel.TrackTaste>,
+        artistTastes: Map<String, UserTasteModel.AggregateTaste>
+    ): List<String> {
+        val songsByArtist = HashMap<String, MutableList<Song>>()
+        for (song in allSongs) {
+            val key = AffinityModel.normalizeArtistKey(song)
+            if (key.isBlank() || key == UNKNOWN_ARTIST_KEY) continue
+            songsByArtist.getOrPut(key) { mutableListOf() }.add(song)
+        }
+
+        data class Pick(val key: String, val score: Float, val songs: List<Song>)
+
+        val best = songsByArtist.entries
+            .filter { it.value.size >= 2 }
+            .map { (key, list) ->
+                val taste = artistTastes[key]
+                val earned = taste?.let { it.value * (0.3f + 0.7f * it.confidence) } ?: 0f
+                val fallback = (list.sumOf { (telemetryCache[it.id]?.playCount ?: 0) }.toFloat() /
+                        (list.size * 10f)).coerceAtMost(0.5f)
+                Pick(key, earned + fallback, list)
+            }
+            .maxWithOrNull(compareBy<Pick> { it.score }.thenBy { it.key }) ?: return emptyList()
+        if (best.score <= 0f) return emptyList()
+
+        // Multiple representative tracks of that artist — not just one song.
+        return best.songs
+            .sortedByDescending { song ->
+                val taste = trackTastes[song.id]
+                val t = telemetryCache[song.id]
+                when {
+                    taste != null && taste.confidence > 0f ->
+                        taste.positive * taste.confidence
+                    t != null && t.playCount > 0 ->
+                        (t.playCount.toFloat() / (t.playCount + 6f)) * 0.5f
+                    else -> 0f
+                }
+            }
+            .take(SPOTLIGHT_TRACKS)
+            .map { it.id }
+    }
+
+    /**
+     * Time-of-day anchors from actual listening behaviour in the current
+     * bucket. Empty when the context evidence is insufficient — the mix then
+     * blends into ordinary user taste instead of inventing a preference.
+     */
+    private fun timeBucketAnchors(allSongs: List<Song>): List<String> {
+        val bucket = TimeOfDay.current()
+        fun bucketPlays(t: PlaybackTelemetryEntity): Int = when (bucket) {
+            TimeOfDay.MORNING -> t.morningPlays
+            TimeOfDay.AFTERNOON -> t.afternoonPlays
+            TimeOfDay.EVENING -> t.eveningPlays
+            TimeOfDay.NIGHT -> t.nightPlays
+        }
+        return allSongs.mapNotNull { song ->
+            val t = telemetryCache[song.id] ?: return@mapNotNull null
+            val plays = bucketPlays(t)
+            if (plays < TIME_BUCKET_MIN_PLAYS) null else song.id to plays
+        }
+            .sortedWith(compareByDescending<Pair<String, Int>> { it.second }.thenBy { it.first })
+            .take(TIME_BUCKET_ANCHORS)
+            .map { it.first }
+    }
+
+    // ── Seeds and taste ──
+
     private suspend fun ensureTrackTastes(revision: Long): Map<String, UserTasteModel.TrackTaste> {
         tasteMutex.withLock {
             if (revision == tasteCacheRevision && tasteCache.isNotEmpty()) return tasteCache
@@ -1204,10 +1286,13 @@ class AbstraAiEngine(
 
     private suspend fun ensureTelemetryLoaded() {
         if (telemetryLoaded) return
-        runCatching {
-            telemetryDao.getAllTelemetrySync().forEach { telemetryCache[it.songId] = it }
+        telemetryMutex.withLock {
+            if (telemetryLoaded) return
+            runCatching {
+                telemetryDao.getAllTelemetrySync().forEach { telemetryCache[it.songId] = it }
+            }
+            telemetryLoaded = true
         }
-        telemetryLoaded = true
     }
 
     /** Recently played ids are stored as a comma-separated string by the UI layer. */
@@ -1544,15 +1629,21 @@ class AbstraAiEngine(
 
         private const val MAX_SEED_WEIGHT = 4f
 
+        /** Tracks of the spotlight artist used as representative anchors. */
+        private const val SPOTLIGHT_TRACKS = 5
+
+        /** Minimum bucket plays before a song counts as a context anchor. */
+        private const val TIME_BUCKET_MIN_PLAYS = 2
+        private const val TIME_BUCKET_ANCHORS = 5
+
+        private const val DEBUG_DIAGNOSTICS_TRACKS = 10
+
+        private const val UNKNOWN_ARTIST_KEY = "unknown artist"
+
         /** Recommendation algorithm version — bump to invalidate cached mixes. */
         const val ALGORITHM_VERSION = 2
 
         /** Preset configuration version — bump when presets materially change. */
-        const val PRESET_VERSION = 2
-
-        private const val PROGRESS_TICK_MAX_MS = 20_000L
-        private const val FAST_SKIP_MS = 15_000L
-        private const val FAST_SKIP_RATIO = 0.12f
-        private const val REPLAY_WINDOW_MS = 120_000L
+        const val PRESET_VERSION = 3
     }
 }

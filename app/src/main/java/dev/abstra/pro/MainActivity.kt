@@ -33,6 +33,7 @@ import androidx.compose.ui.util.fastAny
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.abstra.pro.data.model.Folder
+import dev.abstra.pro.data.model.Song
 import dev.abstra.pro.data.model.StorageInfo
 import dev.abstra.pro.ui.components.*
 import dev.abstra.pro.ui.screens.*
@@ -666,6 +667,13 @@ class MainActivity : ComponentActivity() {
                         key(showQueueSheet) {
                             val q by viewModel.queue.collectAsState()
                             val qIdx by viewModel.currentIndex.collectAsState()
+                            val currentForSuggestion by viewModel.currentSong.collectAsState()
+                            var suggestion by remember { mutableStateOf<Song?>(null) }
+                            LaunchedEffect(currentForSuggestion?.id, q.size, qIdx) {
+                                suggestion = currentForSuggestion?.let { song ->
+                                    viewModel.nextTrackSuggestion(song, allSongs)
+                                }
+                            }
                             QueueBottomSheet(
                                 queue = q,
                                 currentIndex = qIdx,
@@ -681,7 +689,13 @@ class MainActivity : ComponentActivity() {
                                 onSongClick = { song -> 
                                     viewModel.playSong(song)
                                     showQueueSheet = false
-                                }
+                                },
+                                suggestedNext = suggestion,
+                                onPlaySuggestion = { song ->
+                                    viewModel.playSong(song)
+                                    showQueueSheet = false
+                                },
+                                onEnqueueSuggestion = { song -> viewModel.playNext(song) }
                             )
                         }
                     }

@@ -18,7 +18,8 @@ data class CachedPlaylist(
  * Persisted daily mix cache with rich invalidation metadata. Generation is
  * reproducible via date + seed; the cache is only reused while every
  * fingerprint matches, so material changes to the library, metadata, audio
- * graph, algorithms, presets or user taste trigger regeneration.
+ * graph, algorithms, presets, user taste or listening context trigger
+ * regeneration.
  */
 data class MixCacheData(
     val dateKey: String,
@@ -33,10 +34,35 @@ data class MixCacheData(
     val presetVersion: Int = 0,
     /** Revision counter of meaningful user taste changes. */
     val tasteRevision: Long = 0L,
+    /** Time-of-day bucket the mixes were generated for (contextual mixes). */
+    val contextBucket: String = "",
     /** Base seed shared by all presets of one daily generation. */
     val baseSeed: Long = 0L,
     val playlists: List<CachedPlaylist> = emptyList()
-)
+) {
+    /**
+     * The cache is reusable only while every invalidation dimension matches.
+     * Playback position updates never participate — only meaningful
+     * boundaries change these values.
+     */
+    fun isFresh(
+        dateKey: String,
+        libraryFingerprint: String,
+        metadataFingerprint: String,
+        graphVersion: Int,
+        algorithmVersion: Int,
+        presetVersion: Int,
+        tasteRevision: Long,
+        contextBucket: String
+    ): Boolean = this.dateKey == dateKey &&
+            this.libraryFingerprint == libraryFingerprint &&
+            this.metadataFingerprint == metadataFingerprint &&
+            this.graphVersion == graphVersion &&
+            this.algorithmVersion == algorithmVersion &&
+            this.presetVersion == presetVersion &&
+            this.tasteRevision == tasteRevision &&
+            this.contextBucket == contextBucket
+}
 
 /**
  * Caches generated daily mixes so they do not change every time the user

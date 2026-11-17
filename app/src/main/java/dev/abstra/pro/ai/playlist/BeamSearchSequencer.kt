@@ -134,6 +134,12 @@ object BeamSearchSequencer {
         if (candidates.isEmpty()) return emptyList()
         val byId = candidates.associateBy { it.input.song.id }
 
+        // Normalized metadata keys for the MMR metadata fallback — computed
+        // once per sequencing run instead of once per compared pair.
+        val metadataKeys = candidates.associate {
+            it.input.song.id to AudioSimilarity.MetadataKey.of(it.input.song)
+        }
+
         // MMR-diversified shortlist within the bounded pool.
         val poolTarget = min(
             max(CANDIDATE_POOL_MIN, candidates.size / 2),
@@ -149,7 +155,10 @@ object BeamSearchSequencer {
                 if (sigA != null && sigB != null) {
                     AudioSimilarity.similarity(sigA, sigB, input.transitionContext.scaler) ?: 0.5f
                 } else {
-                    AudioSimilarity.metadataSimilarity(a.input.song, b.input.song)
+                    AudioSimilarity.metadataSimilarity(
+                        metadataKeys.getValue(a.input.song.id),
+                        metadataKeys.getValue(b.input.song.id)
+                    )
                 }
             },
             targetSize = poolTarget

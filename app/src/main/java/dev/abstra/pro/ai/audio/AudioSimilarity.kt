@@ -193,29 +193,38 @@ object AudioSimilarity {
      */
     fun metadataSimilarity(a: Song, b: Song): Float {
         if (a.id == b.id) return 1f
+        return metadataSimilarity(MetadataKey.of(a), MetadataKey.of(b))
+    }
+
+    /**
+     * Metadata similarity between precomputed keys. Semantically identical
+     * to [metadataSimilarity] but avoids re-normalizing strings and genre
+     * families for every compared pair — the difference between seconds and
+     * minutes on large libraries.
+     */
+    fun metadataSimilarity(a: MetadataKey, b: MetadataKey): Float {
+        if (a.songId == b.songId) return 1f
 
         val artistScore = when {
-            normArtist(a).isBlank() || normArtist(b).isBlank() -> 0.5f to 0.4f
-            normArtist(a) == normArtist(b) -> 1f to 1f
+            a.artist.isBlank() || b.artist.isBlank() -> 0.5f to 0.4f
+            a.artist == b.artist -> 1f to 1f
             else -> 0.35f to 0.5f // same album often implies shared artist styles
         }
 
         val albumScore = when {
-            normAlbum(a).isBlank() || normAlbum(b).isBlank() -> 0.5f to 0.4f
-            normAlbum(a) == normAlbum(b) -> 1f to 0.9f
+            a.album.isBlank() || b.album.isBlank() -> 0.5f to 0.4f
+            a.album == b.album -> 1f to 0.9f
             else -> 0.4f to 0.6f
         }
 
-        val genresA = dev.abstra.pro.ai.SongProfileAnalyzer.genreFamilies(a.genre)
-        val genresB = dev.abstra.pro.ai.SongProfileAnalyzer.genreFamilies(b.genre)
         val genreScore = when {
-            genresA.isEmpty() || genresB.isEmpty() -> 0.5f to 0.4f
-            genresA.intersect(genresB).isNotEmpty() -> 0.9f to 0.7f
+            a.genreFamilies.isEmpty() || b.genreFamilies.isEmpty() -> 0.5f to 0.4f
+            a.genreFamilies.intersect(b.genreFamilies).isNotEmpty() -> 0.9f to 0.7f
             else -> 0.3f to 0.7f
         }
 
-        val keywordScore = keywordOverlap(a.title, b.title) * 0.5f +
-                keywordOverlap(a.album, b.album) * 0.5f
+        val keywordScore = keywordOverlap(a.titleWords, b.titleWords) * 0.5f +
+                keywordOverlap(a.albumWords, b.albumWords) * 0.5f
 
         var weighted = 0f
         var totalWeight = 0f
@@ -233,9 +242,35 @@ object AudioSimilarity {
         else (weighted / totalWeight).coerceIn(0f, 1f)
     }
 
-    private fun keywordOverlap(a: String?, b: String?): Float {
-        val wordsA = significantWords(a)
-        val wordsB = significantWords(b)
+    /**
+     * Precomputed normalized metadata of one song, for pairwise comparisons
+     * over large candidate sets.
+     */
+    class MetadataKey private constructor(
+        val songId: String,
+        val artist: String,
+        val album: String,
+        val genreFamilies: Set<String>,
+        val titleWords: Set<String>,
+        val albumWords: Set<String>
+    ) {
+        companion object {
+            fun of(song: Song): MetadataKey = MetadataKey(
+                songId = song.id,
+                artist = song.artist.trim().lowercase(Locale.ROOT),
+                album = song.album.trim().lowercase(Locale.ROOT),
+                genreFamilies = dev.abstra.pro.ai.SongProfileAnalyzer.genreFamilies(song.genre),
+                titleWords = significantWords(song.title),
+                albumWords = significantWords(song.album)
+            )
+        }
+    }
+
+    private fun keywordOverlap(a: String?, b: String?): Float =
+        keywordOverlap(significantWords(a), significantWords(b))
+
+    /** Semantics identical to the string version, on precomputed word sets. */
+    private fun keywordOverlap(wordsA: Set<String>, wordsB: Set<String>): Float {
         if (wordsA.isEmpty() || wordsB.isEmpty()) return 0.5f
         val overlap = wordsA.intersect(wordsB).size
         val smaller = minOf(wordsA.size, wordsB.size).coerceAtLeast(1)
@@ -254,10 +289,4 @@ object AudioSimilarity {
             .filter { it.length >= 3 && it !in STOP_WORDS }
             .toSet()
     }
-
-    private fun normArtist(song: Song): String =
-        song.artist.trim().lowercase(Locale.ROOT)
-
-    private fun normAlbum(song: Song): String =
-        song.album.trim().lowercase(Locale.ROOT)
 }

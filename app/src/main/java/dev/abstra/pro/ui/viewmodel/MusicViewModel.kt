@@ -340,6 +340,17 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Opt-in smart next-track suggestion. Suggests only — never touches the
+     * user's queue. Returns null when no eligible candidate exists.
+     */
+    suspend fun nextTrackSuggestion(currentSong: Song, pool: List<Song>): Song? {
+        val history = _queue.value
+            .takeWhile { it.id != currentSong.id }
+            .toList()
+        return aiEngine.suggestNextSong(currentSong, history, pool)
+    }
+
     // ── Audio Intelligence ──
     private val _audioIntelligenceEnabled = MutableStateFlow(
         prefs.getBoolean("audio_intelligence_enabled", false)
@@ -630,16 +641,18 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun addSongToPlaylist(playlistId: Long, song: Song) {
-        aiEngine.onAddedToUserPlaylist(listOf(song.id))
         viewModelScope.launch {
-            repository.addSongToPlaylist(playlistId, song.id)
+            // Positive feedback only after the playlist write succeeds — a
+            // playlist addition is a preference signal, not a guarantee.
+            runCatching { repository.addSongToPlaylist(playlistId, song.id) }
+                .onSuccess { aiEngine.onAddedToUserPlaylist(listOf(song.id)) }
         }
     }
 
     fun addSongsToPlaylist(playlistId: Long, songs: List<Song>) {
-        aiEngine.onAddedToUserPlaylist(songs.map { it.id })
         viewModelScope.launch {
-            repository.addSongsToPlaylist(playlistId, songs.map { it.id })
+            runCatching { repository.addSongsToPlaylist(playlistId, songs.map { it.id }) }
+                .onSuccess { aiEngine.onAddedToUserPlaylist(songs.map { it.id }) }
         }
     }
 

@@ -1,17 +1,21 @@
 package dev.abstra.pro.ui.components
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.runtime.*
@@ -29,7 +33,11 @@ fun QueueBottomSheet(
     onClearQueue: () -> Unit,
     onClearEntireQueue: () -> Unit,
     onSongClick: (Song) -> Unit,
-    onRemoveAt: ((Int) -> Unit)? = null
+    onRemoveAt: ((Int) -> Unit)? = null,
+    /** Opt-in smart suggestion — shown only when provided. */
+    suggestedNext: Song? = null,
+    onPlaySuggestion: ((Song) -> Unit)? = null,
+    onEnqueueSuggestion: ((Song) -> Unit)? = null
 ) {
     val colors = LocalAbstraColors.current
     val listState = rememberLazyListState()
@@ -103,6 +111,52 @@ fun QueueBottomSheet(
             }
 
             HorizontalDivider(color = colors.border.copy(alpha = 0.5f))
+
+            // ── Opt-in smart suggestion ──
+            if (suggestedNext != null && onPlaySuggestion != null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onPlaySuggestion(suggestedNext) }
+                        .padding(horizontal = 20.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.AutoAwesome,
+                        contentDescription = null,
+                        tint = colors.primary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Suggested next",
+                            fontSize = 11.sp,
+                            color = colors.textMuted
+                        )
+                        Text(
+                            text = "${suggestedNext.title} • ${suggestedNext.artist}",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = colors.textPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    if (onEnqueueSuggestion != null) {
+                        TextButton(onClick = { onEnqueueSuggestion(suggestedNext) }) {
+                            Icon(
+                                imageVector = Icons.Default.PlayArrow,
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(2.dp))
+                            Text("Play next", fontSize = 12.sp)
+                        }
+                    }
+                }
+                HorizontalDivider(color = colors.border.copy(alpha = 0.5f))
+            }
 
             if (queue.isEmpty()) {
                 Box(

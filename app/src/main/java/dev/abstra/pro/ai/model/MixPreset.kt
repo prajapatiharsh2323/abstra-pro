@@ -1,6 +1,28 @@
 package dev.abstra.pro.ai.model
 
 /**
+ * Which dedicated retrieval strategy a preset uses. All presets share the
+ * one scoring/sequencing pipeline; the strategy only changes where
+ * candidates come from and how the preset adapts to context.
+ */
+enum class MixStrategy {
+    /** Ordinary taste-anchored retrieval. */
+    DEFAULT,
+
+    /** Contextual: anchors and targets from the current time-of-day bucket. */
+    TIME_OF_DAY,
+
+    /** Previously enjoyed tracks that have not been played recently. */
+    FORGOTTEN_GEMS,
+
+    /** Genuinely acoustic / live / instrumental material. */
+    ACOUSTIC_LIVE,
+
+    /** Personal radio around one well-liked artist, open to related artists. */
+    ARTIST_SPOTLIGHT
+}
+
+/**
  * Configuration-driven definition of a mood preset. Presets are recommendation
  * targets for the one shared pipeline — not separate algorithms.
  */
@@ -9,6 +31,9 @@ data class MixPreset(
     val title: String,
     val subtitle: String,
     val description: String,
+
+    /** Dedicated candidate-retrieval strategy. */
+    val strategy: MixStrategy = MixStrategy.DEFAULT,
 
     /** Base target energy when no sequencing curve overrides it. */
     val targetEnergy: Float = 0.5f,

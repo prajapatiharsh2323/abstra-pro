@@ -1,22 +1,28 @@
 package dev.abstra.pro.ai
 
-import dev.abstra.pro.ai.model.EnergyCurvePoint
 import dev.abstra.pro.ai.model.MixPreset
+import dev.abstra.pro.ai.model.MixStrategy
 import dev.abstra.pro.ai.model.PlaylistRequest
+import dev.abstra.pro.ai.model.TimeOfDay
 
 /**
- * Configuration-driven mood presets. Focus and Night use the same scoring and
- * sequencing pipeline as every other preset — only the target values differ.
+ * Configuration-driven mood presets. Every preset uses the same scoring and
+ * sequencing pipeline — only targets and retrieval strategies differ.
+ *
+ * The lineup is the eight listening categories:
+ * DAILY_FLOW, DISCOVERY, ENERGY, CHILL, TIME_OF_DAY, FORGOTTEN_GEMS,
+ * ACOUSTIC_LIVE, ARTIST_SPOTLIGHT.
  */
 object MixPresetCatalog {
 
     const val PRESET_DAILY_FLOW = "daily_flow"
     const val PRESET_DISCOVERY = "discovery"
-    const val PRESET_UPBEAT = "upbeat"
+    const val PRESET_ENERGY = "upbeat"
     const val PRESET_CHILL = "chill"
-    const val PRESET_FOCUS = "focus"
-    const val PRESET_WORKOUT = "workout"
-    const val PRESET_NIGHT = "night"
+    const val PRESET_TIME_OF_DAY = "time_of_day"
+    const val PRESET_FORGOTTEN_GEMS = "forgotten_gems"
+    const val PRESET_ACOUSTIC_LIVE = "acoustic_live"
+    const val PRESET_ARTIST_SPOTLIGHT = "artist_spotlight"
 
     val presets: List<MixPreset> = listOf(
         MixPreset(
@@ -28,7 +34,7 @@ object MixPresetCatalog {
             energyTolerance = 0.4f,
             targetRhythmActivity = 0.45f,
             rhythmTolerance = 0.4f,
-            preferredTags = setOf("upbeat", "chill", "focus"),
+            preferredTags = setOf("upbeat", "chill"),
             avoidedTags = setOf(),
             targetDurationMs = 60L * 60L * 1000L,
             discoveryRatio = 0.20f,
@@ -36,7 +42,7 @@ object MixPresetCatalog {
         ),
         MixPreset(
             id = PRESET_DISCOVERY,
-            title = "Discovery",
+            title = "Deep Discovery",
             subtitle = "Hidden gems you might love",
             description = "A mix of familiar anchors and promising unfamiliar tracks, chosen to fit your taste.",
             targetEnergy = 0.55f,
@@ -49,8 +55,8 @@ object MixPresetCatalog {
             maxTracks = 45
         ),
         MixPreset(
-            id = PRESET_UPBEAT,
-            title = "Upbeat",
+            id = PRESET_ENERGY,
+            title = "Energy Boost",
             subtitle = "Bright, rhythmic energy",
             description = "Energetic tracks with rhythmic drive for movement and momentum.",
             targetEnergy = 0.78f,
@@ -62,96 +68,130 @@ object MixPresetCatalog {
             targetTempoMaxBpm = 160f,
             targetAcousticness = 0.3f,
             acousticnessTolerance = 0.6f,
-            preferredTags = setOf("upbeat", "remix"),
-            avoidedTags = setOf("ambient", "lo-fi"),
+            preferredTags = setOf("upbeat"),
+            avoidedTags = setOf("ambient", "lo-fi", "acoustic"),
             targetDurationMs = 45L * 60L * 1000L,
             discoveryRatio = 0.20f,
             maxTracks = 45
         ),
         MixPreset(
             id = PRESET_CHILL,
-            title = "Chill",
-            subtitle = "Soft, low-energy textures",
-            description = "Consistently calm listening with gentle variation — great for unwinding.",
-            targetEnergy = 0.28f,
-            energyTolerance = 0.22f,
-            targetRhythmActivity = 0.3f,
-            rhythmTolerance = 0.3f,
-            targetBrightness = 0.4f,
-            targetAcousticness = 0.5f,
-            acousticnessTolerance = 0.55f,
-            preferredTags = setOf("chill", "ambient", "acoustic", "lo-fi"),
-            avoidedTags = setOf("remix"),
-            targetDurationMs = 60L * 60L * 1000L,
-            discoveryRatio = 0.15f,
-            maxTracks = 50
-        ),
-        MixPreset(
-            id = PRESET_FOCUS,
-            title = "Focus",
-            subtitle = "Steady, low-distraction listening",
-            description = "Stable, lower-to-medium energy with instrumental and focus-friendly characteristics.",
-            targetEnergy = 0.42f,
-            energyTolerance = 0.25f,
-            targetRhythmActivity = 0.35f,
-            rhythmTolerance = 0.3f,
-            targetBrightness = 0.45f,
-            targetAcousticness = 0.45f,
-            acousticnessTolerance = 0.5f,
-            targetInstrumental = 0.5f,
-            preferredTags = setOf("focus", "instrumental", "ambient", "lo-fi"),
-            avoidedTags = setOf("remix", "live", "upbeat"),
-            targetDurationMs = 60L * 60L * 1000L,
-            discoveryRatio = 0.10f,
-            maxTracks = 50
-        ),
-        MixPreset(
-            id = PRESET_WORKOUT,
-            title = "Workout",
-            subtitle = "Warm-up, peak, cooldown",
-            description = "A gradual energy build-up, a high-energy middle and a cooldown finish.",
-            targetEnergy = 0.75f,
-            energyTolerance = 0.35f,
-            targetRhythmActivity = 0.75f,
-            rhythmTolerance = 0.35f,
-            targetTempoMinBpm = 110f,
-            targetTempoMaxBpm = 180f,
-            preferredTags = setOf("upbeat", "workout"),
-            avoidedTags = setOf("ambient"),
-            energyCurve = listOf(
-                EnergyCurvePoint(0.0f, 0.4f),
-                EnergyCurvePoint(0.2f, 0.6f),
-                EnergyCurvePoint(0.5f, 0.85f),
-                EnergyCurvePoint(0.75f, 0.9f),
-                EnergyCurvePoint(1.0f, 0.4f)
-            ),
-            targetDurationMs = 45L * 60L * 1000L,
-            discoveryRatio = 0.15f,
-            maxTracks = 40
-        ),
-        MixPreset(
-            id = PRESET_NIGHT,
-            title = "Night",
-            subtitle = "Late-night calm",
-            description = "Lower energy and suitable late-night listening characteristics.",
+            title = "Chill & Focus",
+            subtitle = "Soft, low-distraction listening",
+            description = "Consistently calm listening with gentle, low-distraction characteristics.",
             targetEnergy = 0.32f,
             energyTolerance = 0.25f,
             targetRhythmActivity = 0.3f,
-            rhythmTolerance = 0.35f,
-            targetBrightness = 0.35f,
-            targetAcousticness = 0.4f,
+            rhythmTolerance = 0.3f,
+            targetBrightness = 0.42f,
+            targetAcousticness = 0.5f,
             acousticnessTolerance = 0.55f,
-            preferredTags = setOf("night", "ambient", "chill"),
-            avoidedTags = setOf("remix", "upbeat"),
+            targetInstrumental = 0.4f,
+            preferredTags = setOf("chill", "ambient", "acoustic", "lo-fi", "focus", "instrumental"),
+            avoidedTags = setOf("remix", "live", "upbeat"),
             targetDurationMs = 60L * 60L * 1000L,
             discoveryRatio = 0.15f,
             maxTracks = 50
+        ),
+        MixPreset(
+            id = PRESET_TIME_OF_DAY,
+            title = "Time of Day",
+            subtitle = "Music for this moment",
+            description = "Built from what you actually listen to in this part of the day.",
+            strategy = MixStrategy.TIME_OF_DAY,
+            targetEnergy = 0.5f,
+            energyTolerance = 0.45f,
+            targetRhythmActivity = 0.45f,
+            rhythmTolerance = 0.45f,
+            targetDurationMs = 60L * 60L * 1000L,
+            discoveryRatio = 0.20f,
+            excludeRecentlyPlayed = true,
+            maxTracks = 45
+        ),
+        MixPreset(
+            id = PRESET_FORGOTTEN_GEMS,
+            title = "Forgotten Gems",
+            subtitle = "Great songs you drifted away from",
+            description = "Tracks you clearly enjoyed but have not heard in a while.",
+            strategy = MixStrategy.FORGOTTEN_GEMS,
+            targetEnergy = 0.55f,
+            energyTolerance = 0.5f,
+            targetDurationMs = 60L * 60L * 1000L,
+            discoveryRatio = 0.0f,
+            excludeRecentlyPlayed = true,
+            maxTracks = 45
+        ),
+        MixPreset(
+            id = PRESET_ACOUSTIC_LIVE,
+            title = "Acoustic & Live",
+            subtitle = "Stripped-down and on stage",
+            description = "Acoustic, live and instrumental recordings, from metadata and audio analysis.",
+            strategy = MixStrategy.ACOUSTIC_LIVE,
+            targetEnergy = 0.4f,
+            energyTolerance = 0.4f,
+            targetAcousticness = 0.8f,
+            acousticnessTolerance = 0.35f,
+            targetInstrumental = 0.35f,
+            preferredTags = setOf("acoustic", "live", "instrumental", "unplugged"),
+            avoidedTags = setOf("remix"),
+            targetDurationMs = 60L * 60L * 1000L,
+            discoveryRatio = 0.20f,
+            maxTracks = 45
+        ),
+        MixPreset(
+            id = PRESET_ARTIST_SPOTLIGHT,
+            title = "Artist Spotlight",
+            subtitle = "A personal radio session",
+            description = "Built around an artist you enjoy, opening into related music by other artists.",
+            strategy = MixStrategy.ARTIST_SPOTLIGHT,
+            targetEnergy = 0.55f,
+            energyTolerance = 0.45f,
+            targetDurationMs = 60L * 60L * 1000L,
+            discoveryRatio = 0.35f,
+            excludeRecentlyPlayed = true,
+            maxTracks = 45
         )
     )
 
     private val byId = presets.associateBy { it.id }
 
     fun byId(id: String): MixPreset = byId[id] ?: presets.first()
+
+    /**
+     * The contextual preset adapted to the current time bucket: real targets
+     * and titles change with the moment, backed by bucket-specific listening
+     * evidence (never by clock time alone — cold start keeps the base preset).
+     */
+    fun timeOfDayPreset(bucket: TimeOfDay): MixPreset {
+        val base = byId(PRESET_TIME_OF_DAY)
+        return when (bucket) {
+            TimeOfDay.MORNING -> base.copy(
+                title = "Morning Mix",
+                subtitle = "Ease into the day",
+                targetEnergy = 0.55f,
+                targetRhythmActivity = 0.45f
+            )
+            TimeOfDay.AFTERNOON -> base.copy(
+                title = "Afternoon Mix",
+                subtitle = "Keep the day moving",
+                targetEnergy = 0.62f,
+                targetRhythmActivity = 0.5f
+            )
+            TimeOfDay.EVENING -> base.copy(
+                title = "Evening Mix",
+                subtitle = "Wind the day down",
+                targetEnergy = 0.45f,
+                targetRhythmActivity = 0.4f
+            )
+            TimeOfDay.NIGHT -> base.copy(
+                title = "Night Mix",
+                subtitle = "Late-night calm",
+                targetEnergy = 0.3f,
+                targetRhythmActivity = 0.3f,
+                targetBrightness = 0.35f
+            )
+        }
+    }
 
     /** A stable per-refresh seed derived from the base seed and preset id. */
     fun seedFor(preset: MixPreset, baseSeed: Long): Long =

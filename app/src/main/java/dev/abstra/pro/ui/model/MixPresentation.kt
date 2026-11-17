@@ -41,6 +41,22 @@ object MixPresentation {
         "night" to Visuals(
             listOf(Color(0xFF241825), Color(0xFF43283D), Color(0xFF8D517B)),
             "bedtime"
+        ),
+        "time_of_day" to Visuals(
+            listOf(Color(0xFFF2A65A), Color(0xFFE86F51), Color(0xFF6E4B3C)),
+            "schedule"
+        ),
+        "forgotten_gems" to Visuals(
+            listOf(Color(0xFFC9A227), Color(0xFF9C7A1E), Color(0xFF4A3B0F)),
+            "history"
+        ),
+        "acoustic_live" to Visuals(
+            listOf(Color(0xFFB98A5E), Color(0xFF8A5A33), Color(0xFF3E2A1A)),
+            "music_note"
+        ),
+        "artist_spotlight" to Visuals(
+            listOf(Color(0xFF7E57C2), Color(0xFF5E35B1), Color(0xFF2A1B4A)),
+            "mic"
         )
     )
 

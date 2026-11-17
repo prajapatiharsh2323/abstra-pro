@@ -51,6 +51,10 @@ interface TelemetryDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun recordTransition(transition: MarkovTransitionEntity)
 
+    /** A removed song must leave no transition residue in either direction. */
+    @Query("DELETE FROM markov_transitions WHERE fromSongId = :songId OR toSongId = :songId")
+    suspend fun deleteTransitionsTouching(songId: String)
+
     // ── Aggregated stats ──
     @Query("SELECT SUM(totalPlayedMs) FROM playback_telemetry")
     fun getTotalLifetimePlaytime(): Flow<Long?>

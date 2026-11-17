@@ -68,16 +68,22 @@ class SongGraphBuilder(private val neighborDao: SongNeighborDao) {
         return exactAudioNeighbours(target, candidateSignatures, k, scaler)
     }
 
-    /** Metadata KNN for one song. Always available (metadata is always there). */
+    /** Metadata KNN for one song. Always available (metadata is always there).
+     *  Pass [keysById] (precomputed once for the whole library) to avoid
+     *  re-normalizing every candidate's strings on each call. */
     fun metadataNeighbours(
         target: Song,
         songs: List<Song>,
-        k: Int
+        k: Int,
+        keysById: Map<String, AudioSimilarity.MetadataKey>? = null
     ): List<Neighbour> {
+        val targetKey = AudioSimilarity.MetadataKey.of(target)
         val result = mutableListOf<Neighbour>()
         for (candidate in songs) {
             if (candidate.id == target.id) continue
-            result += Neighbour(candidate.id, AudioSimilarity.metadataSimilarity(target, candidate))
+            val candidateKey = keysById?.get(candidate.id)
+                ?: AudioSimilarity.MetadataKey.of(candidate)
+            result += Neighbour(candidate.id, AudioSimilarity.metadataSimilarity(targetKey, candidateKey))
         }
         return result
             .sortedWith(compareByDescending<Neighbour> { it.similarity }.thenBy { it.songId })
@@ -200,13 +206,16 @@ class SongGraphBuilder(private val neighborDao: SongNeighborDao) {
             }
         }
 
-        // Metadata edges: cover every song, analyzed or not.
+        // Metadata edges: cover every song, analyzed or not. The normalized
+        // metadata of the whole library is precomputed once — the pairwise
+        // loop then costs comparisons, not string processing.
+        val metadataKeys = songs.associate { it.id to AudioSimilarity.MetadataKey.of(it) }
         songs.chunked(batchSize).forEach { batch ->
             for (song in batch) {
                 neighborDao.replaceNeighborsFor(
                     song.id,
                     SongNeighborEntity.EDGE_METADATA,
-                    metadataNeighbours(song, songs, NEIGHBOURS_PER_TYPE).map {
+                    metadataNeighbours(song, songs, NEIGHBOURS_PER_TYPE, metadataKeys).map {
                         SongNeighborEntity(
                             songId = song.id,
                             neighborSongId = it.songId,

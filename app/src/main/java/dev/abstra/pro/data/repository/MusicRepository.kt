@@ -524,6 +524,7 @@ class MusicRepository(
         libraryDao.deleteLyrics(songId)
         playlistDao.removeSongFromAllPlaylists(songId)
         telemetryDao.deleteTelemetry(songId)
+        telemetryDao.deleteTransitionsTouching(songId)
         db.songProfileDao().deleteProfile(songId)
     }
 
